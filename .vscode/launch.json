@@ -1,0 +1,38 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Current File",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": ["train","test","--clean","--limit","1600"],
+            "cwd": "${workspaceFolder}/src"
+        },
+        {
+            "name": "validate",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": ["validate","test"],
+            "cwd": "${workspaceFolder}/src"
+        },
+        {
+            "name": "predict5",
+            "type": "python",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "justMyCode": false,
+            "args": ["predict5","test3","--limit","100"],
+            "cwd": "${workspaceFolder}/src"
+        }
+    ]
+}
