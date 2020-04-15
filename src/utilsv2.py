@@ -19,6 +19,100 @@ import torch.nn.functional as F
 import torch
 from sklearn.metrics import (accuracy_score, confusion_matrix, f1_score,
                              log_loss, roc_auc_score)
+from transformers import BasicTokenizer
+
+def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
+    """Project the tokenized prediction back to the original text."""
+
+    # When we created the data, we kept track of the alignment between original
+    # (whitespace tokenized) tokens and our WordPiece tokenized tokens. So
+    # now `orig_text` contains the span of our original text corresponding to the
+    # span that we predicted.
+    #
+    # However, `orig_text` may contain extra characters that we don't want in
+    # our prediction.
+    #
+    # For example, let's say:
+    #   pred_text = steve smith
+    #   orig_text = Steve Smith's
+    #
+    # We don't want to return `orig_text` because it contains the extra "'s".
+    #
+    # We don't want to return `pred_text` because it's already been normalized
+    # (the SQuAD eval script also does punctuation stripping/lower casing but
+    # our tokenizer does additional normalization like stripping accent
+    # characters).
+    #
+    # What we really want to return is "Steve Smith".
+    #
+    # Therefore, we have to apply a semi-complicated alignment heuristic between
+    # `pred_text` and `orig_text` to get a character-to-character alignment. This
+    # can fail in certain cases in which case we just return `orig_text`.
+
+    def _strip_spaces(text):
+        ns_chars = []
+        ns_to_s_map = collections.OrderedDict()
+        for (i, c) in enumerate(text):
+            if c == " ":
+                continue
+            ns_to_s_map[len(ns_chars)] = i
+            ns_chars.append(c)
+        ns_text = "".join(ns_chars)
+        return (ns_text, ns_to_s_map)
+
+    # We first tokenize `orig_text`, strip whitespace from the result
+    # and `pred_text`, and check if they are the same length. If they are
+    # NOT the same length, the heuristic has failed. If they are the same
+    # length, we assume the characters are one-to-one aligned.
+    tokenizer = BasicTokenizer(do_lower_case=do_lower_case)
+
+    tok_text = " ".join(tokenizer.tokenize(orig_text))
+
+    start_position = tok_text.find(pred_text)
+    if start_position == -1:
+        if verbose_logging:
+            logger.info("Unable to find text: '%s' in '%s'" % (pred_text, orig_text))
+        return orig_text
+    end_position = start_position + len(pred_text) - 1
+
+    (orig_ns_text, orig_ns_to_s_map) = _strip_spaces(orig_text)
+    (tok_ns_text, tok_ns_to_s_map) = _strip_spaces(tok_text)
+
+    if len(orig_ns_text) != len(tok_ns_text):
+        if verbose_logging:
+            logger.info("Length not equal after stripping spaces: '%s' vs '%s'", orig_ns_text, tok_ns_text)
+        return orig_text
+
+    # We then project the characters in `pred_text` back to `orig_text` using
+    # the character-to-character alignment.
+    tok_s_to_ns_map = {}
+    for (i, tok_index) in tok_ns_to_s_map.items():
+        tok_s_to_ns_map[tok_index] = i
+
+    orig_start_position = None
+    if start_position in tok_s_to_ns_map:
+        ns_start_position = tok_s_to_ns_map[start_position]
+        if ns_start_position in orig_ns_to_s_map:
+            orig_start_position = orig_ns_to_s_map[ns_start_position]
+
+    if orig_start_position is None:
+        if verbose_logging:
+            logger.info("Couldn't map start position")
+        return orig_text
+
+    orig_end_position = None
+    if end_position in tok_s_to_ns_map:
+        ns_end_position = tok_s_to_ns_map[end_position]
+        if ns_end_position in orig_ns_to_s_map:
+            orig_end_position = orig_ns_to_s_map[ns_end_position]
+
+    if orig_end_position is None:
+        if verbose_logging:
+            logger.info("Couldn't map end position")
+        return orig_text
+
+    output_text = orig_text[orig_start_position : (orig_end_position + 1)]
+    return output_text
 
 
 def ensemble(senti_preds, start_preds, end_preds, df):
@@ -114,11 +208,20 @@ def get_metrics(all_senti_preds, all_start_preds, all_end_preds, valid_df, args=
         if 0<=all_start_preds[idx]<len(invert_map) and 0<=all_end_preds[idx]<len(invert_map) and all_end_preds[idx]>=all_start_preds[idx]:
             start_word = invert_map[all_start_preds[idx]]
             end_word = invert_map[all_end_preds[idx]]+1
-            pred = ''
-            for pos in range(all_start_preds[idx], all_end_preds[idx]+1):
-                if first_tokens[idx][pos]:
-                    pred += ' '
-                pred += tokens[idx][pos]
+            token_string = args.tokenizer.convert_tokens_to_string(tokens[idx][all_start_preds[idx]:all_end_preds[idx]+1])
+            orig_text = ' '.join(words[start_word:end_word])
+            pred = ' '.join(get_final_text(token_string, orig_text, True).split())
+            # for pos in range(all_start_preds[idx], all_end_preds[idx]+1):
+            #     if first_tokens[idx][pos]:
+            #         pred += ' '
+            #     if len(tokens[idx][pos])>2 and tokens[idx][pos].startswith('##'):
+            #         # bert
+            #         pred += tokens[idx][pos][2:]
+            #     elif tokens[idx][pos].startswith('Ġ'):
+            #         # roberta
+            #         pred += tokens[idx][pos][1:]
+            #     else:
+            #         pred += tokens[idx][pos]
         else:
             start_word, end_word = 0, 0
         selected_text_pred = words[start_word:end_word]

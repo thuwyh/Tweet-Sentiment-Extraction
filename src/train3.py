@@ -23,7 +23,7 @@ from transformers import BertConfig, BertModel, BertTokenizer
 from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup)
 
-from utils import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble,
+from utilsv2 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble,
                    load_model, save_model, set_seed, write_event, get_metrics, get_predicts)
 
 
@@ -55,22 +55,24 @@ class TrainDataset(Dataset):
 
         toksn_id = inputs['input_ids'][0]
         type_id = inputs['token_type_ids'][0]
+        mask = inputs['attention_mask'][0]
         if self._mode == 'train':
             start = self._start[idx]+3
             end = self._end[idx]+3
         else:
             start, end = 0, 0
-        return toksn_id, type_id, self._sentilabel[idx], start, end
+        return toksn_id, mask, type_id, self._sentilabel[idx], start, end
 
 
 def collate_fn(batch):
-    tokens, types, label, start, end = zip(*batch)
+    tokens, masks, types, label, start, end = zip(*batch)
     tokens = pad_sequence(tokens, batch_first=True)
+    masks = pad_sequence(masks, batch_first=True)
     types = pad_sequence(types, batch_first=True, padding_value=1)
     label = torch.LongTensor(label)
     start = torch.LongTensor(start)
     end = torch.LongTensor(end)
-    return tokens, types, label, start, end
+    return tokens, masks, types, label, start, end
 
 
 class TweetModel(nn.Module):
@@ -121,12 +123,13 @@ def main():
     arg('--train-file', type=str, default='train.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
+    arg('--no-neutral', action='store_true')
 
     arg('--epsilon', type=float, default=0.3)
-
     arg('--max-len', type=int, default=200)
-
+    arg('--fp16', action='store_true')
     arg('--lr-layerdecay', type=float, default=1.0)
+    arg('--weight-decay', type=float, default=0.0)
     arg('--max_grad_norm', type=float, default=-1.0)
     arg('--adam-epsilon', type=float, default=1e-8)
 
@@ -141,10 +144,12 @@ def main():
     run_root = Path('../experiments/' + args.run_root)
     DATA_ROOT = Path('../input/')
     tokenizer = BertTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=True)
-
+    args.tokenizer = tokenizer
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
         folds = pd.read_pickle(DATA_ROOT / args.train_file)
         train_fold = folds[folds['fold'] != args.fold]
+        if args.no_neutral:
+            train_fold = train_fold[train_fold['sentiment']!='neutral']
         valid_fold = folds[folds['fold'] == args.fold]
         print(valid_fold.shape)
         print('training fold:', args.fold)
@@ -156,8 +161,8 @@ def main():
         if run_root.exists() and args.clean:
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
-        (run_root / 'params.json').write_text(
-            json.dumps(vars(args), indent=4, sort_keys=True))
+        # (run_root / 'params.json').write_text(
+        #     json.dumps(vars(args), indent=4, sort_keys=True))
 
         training_set = TrainDataset(
             train_fold, vocab_path=args.vocab_path, do_lower=True)
@@ -174,23 +179,17 @@ def main():
         model.cuda()
 
         config = BertConfig.from_pretrained(args.bert_path)
-        num_layers = config.num_hidden_layers
+        no_decay = ["bias", "LayerNorm.weight"]
         optimizer_grouped_parameters = [
-            {'params': model.bert.embeddings.parameters(), 'lr': args.lr *
-             (args.lr_layerdecay ** num_layers)},
-            {'params': model.head.parameters(), 'lr': args.lr},
-            {'params': model.bert.pooler.parameters(), 'lr': args.lr}
+            {
+                "params": [p for n, p in model.named_parameters() if not any(nd in n for nd in no_decay)],
+                "weight_decay": args.weight_decay,
+            },
+            {"params": [p for n, p in model.named_parameters() if any(nd in n for nd in no_decay)], "weight_decay": 0.0},
         ]
-
-        for layer in range(num_layers):
-            optimizer_grouped_parameters.append(
-                {'params': model.bert.encoder.layer.__getattr__('%d' % (num_layers - 1 - layer)).parameters(),
-                 'lr': args.lr * (args.lr_layerdecay ** layer)},
-            )
-        optimizer = AdamW(optimizer_grouped_parameters,
-                          lr=args.lr, eps=args.adam_epsilon)
-        model, optimizer = amp.initialize(
-            model, optimizer, opt_level="O2", verbosity=0)
+        optimizer = AdamW(optimizer_grouped_parameters, lr=args.lr, eps=args.adam_epsilon)
+        if args.fp16:
+            model, optimizer = amp.initialize(model, optimizer, opt_level="O2", verbosity=0)
 
         total_steps = int(len(train_fold) * args.n_epochs /
                           args.step / args.batch_size)
@@ -287,7 +286,8 @@ def main():
         model = TweetModel(config=config)
         load_model(model, run_root / ('best-model-%d.pt' % args.fold))
         model.cuda()
-        model = amp.initialize(model, opt_level="O2", verbosity=0)
+        if args.fp16:
+            model = amp.initialize(model, opt_level="O2", verbosity=0)
         if args.multi_gpu == 1:
             model = nn.DataParallel(model)
 
@@ -333,7 +333,8 @@ def main():
             load_model(model, run_root / ('best-model-%d.pt' % args.fold))
 
             model.cuda()
-            model = amp.initialize(model, None, opt_level="O2", verbosity=0)
+            if args.fp16:
+                model = amp.initialize(model, None, opt_level="O2", verbosity=0)
             if args.multi_gpu == 1:
                 model = nn.DataParallel(model)
             all_senti_preds, all_start_preds, all_end_preds = predict(
@@ -361,15 +362,15 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
     model_path = run_root / ('model-%d.pt' % args.fold)
     best_model_path = run_root / ('best-model-%d.pt' % args.fold)
     best_model_loss_path = run_root / ('best-loss-%d.pt' % args.fold)
-    if best_model_path.exists():
-        state, best_valid_score = load_model(model, best_model_path)
-        start_epoch = state['epoch']
-        best_epoch = start_epoch
-    else:
-        best_valid_score = 0
-        best_valid_loss = 1e10
-        start_epoch = 0
-        best_epoch = 0
+    # if best_model_path.exists():
+    #     state, best_valid_score = load_model(model, best_model_path)
+    #     start_epoch = state['epoch']
+    #     best_epoch = start_epoch
+    # else:
+    best_valid_score = 0
+    best_valid_loss = 1e10
+    start_epoch = 0
+    best_epoch = 0
     step = 0
     log = run_root.joinpath('train-%d.log' %
                             args.fold).open('at', encoding='utf8')
@@ -381,17 +382,17 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
         tq = tqdm.tqdm(total=epoch_length)
         losses = []
         mean_loss = 0
-        for i, (inputs, types, targets, starts, ends) in enumerate(train_loader):
+        for i, (inputs, masks, types, targets, starts, ends) in enumerate(train_loader):
             lr = get_learning_rate(optimizer)
             batch_size, length = inputs.size(0), inputs.size(1)
-            masks = (inputs > 0).cuda()
+            masks = masks.cuda()
             inputs, targets = inputs.cuda(), targets.cuda()
             types = types.cuda()
             starts, ends = starts.cuda(), ends.cuda()
 
             # emb_layer = model.bert.get_input_embeddings()
             # emb = emb_layer(inputs) , input_emb=emb
-            if random.random() < 0.8:
+            if random.random() < 1.8:
                 senti_out, start_out, end_out = model(inputs, masks, types)
                 # 正常loss
                 start_loss = loss_fn(start_out, starts)
@@ -405,9 +406,12 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
                 end_loss = loss_fn(end_out, ends)
                 loss = senti_loss+(start_loss+end_loss)/2
             loss /= args.step
-
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
+            
+            if args.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
 
             # grad = torch.cat([emb_layer.weight.grad.index_select(0, inputs[i]) for i in range(len(inputs))])
             # grad = grad.view(batch_size,length, -1)
@@ -422,11 +426,16 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             # with amp.scale_loss(adv_loss, optimizer) as scaled_loss:
             #     scaled_loss.backward()
             if args.max_grad_norm > 0:
-                torch.nn.utils.clip_grad_norm_(
-                    amp.master_params(optimizer), args.max_grad_norm)
-            optimizer.step()
-            optimizer.zero_grad()
-            scheduler.step()
+                if args.fp16:
+                    torch.nn.utils.clip_grad_norm_(
+                        amp.master_params(optimizer), args.max_grad_norm)
+                else:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            
+            if (i+1)%args.step==0:
+                optimizer.step()
+                optimizer.zero_grad()
+                scheduler.step()
 
             losses.append(loss.item() * args.step)
             mean_loss = np.mean(losses[-1000:])
@@ -457,31 +466,30 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_
     if progress:
         tq = tqdm.tqdm(total=len(valid_df))
     with torch.no_grad():
-        for inputs, types, _, _, _ in valid_loader:
+        for inputs, masks, types, _, _, _ in valid_loader:
             if progress:
                 batch_size = inputs.size(0)
                 tq.update(batch_size)
-            masks = (inputs > 0).cuda()
+            masks = masks.cuda()
             inputs = inputs.cuda()
             types = types.cuda()
             senti_out, start_out, end_out = model(inputs, masks, types)
 
-            masks[:,1:3]=~masks[:,1:3]
-            senti_out2, start_out2, end_out2 = model(inputs, masks, types)
+            # masks[:,1:3]=~masks[:,1:3]
+            # senti_out2, start_out2, end_out2 = model(inputs, masks, types)
             
             masks = masks.cpu().numpy().astype(np.int)
             if not for_ensemble:
-                senti_pred = torch.argmax(senti_out2, dim=-1)
-                start_out = torch.softmax(start_out+0.1*start_out2, dim=-1).cpu().numpy()
-                end_out = torch.softmax(end_out+0.1*end_out2, dim=-1).cpu().numpy()
+                senti_pred = torch.argmax(senti_out, dim=-1)
+                start_out = torch.softmax(start_out, dim=-1).cpu().numpy()
+                end_out = torch.softmax(end_out, dim=-1).cpu().numpy()
                 all_senti_pred.append(senti_pred.cpu().numpy())
                 for idx in range(len(senti_pred)):
-                    start, end = get_best_pred(
-                        start_out[idx, :], end_out[idx, :], np.sum(masks[idx, :])-2)
+                    start, end = get_best_pred(start_out[idx, :], end_out[idx, :], None)
                     all_start_pred.append(start)
                     all_end_pred.append(end)
             else:
-                all_senti_pred.append(senti_out2.cpu().numpy())
+                all_senti_pred.append(senti_out.cpu().numpy())
                 all_start_pred.append(start_out.cpu().numpy())
                 all_end_pred.append(end_out.cpu().numpy())
 
@@ -497,10 +505,9 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
     all_senti_preds, all_start_preds, all_end_preds = predict(
         model, valid_df, valid_loader, args)
     metrics = get_metrics(all_senti_preds, all_start_preds,
-                          all_end_preds, valid_df)
+                          all_end_preds, valid_df, args)
 
     return metrics
-
 
 if __name__ == '__main__':
     main()

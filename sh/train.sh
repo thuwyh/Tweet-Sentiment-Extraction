@@ -2,12 +2,12 @@ cd ../src
 # python train.py train test --batch-size 16 --clean --lr 5e-5
 # python train.py validate test --batch-size 16
 
-# python train2.py train test2 --batch-size 16 --clean --lr 5e-5
-# python train3.py train test3 --batch-size 16 --clean --lr 5e-5
-# python train3.py train test3 --batch-size 16 --lr 5e-5 --fold 1
-# python train3.py train test3 --batch-size 16 --lr 5e-5 --fold 2
-# python train3.py train test3 --batch-size 16 --lr 5e-5 --fold 3
-# python train3.py train test3 --batch-size 16 --lr 5e-5 --fold 4
+# python train3.py train test3 --batch-size 16 --bert-path ../../bert_models/bert_base_uncased/ --train-file train_v2.pkl
+# python train3.py validate test3 --batch-size 16 --bert-path ../../bert_models/bert_base_uncased/
+# python train3.py train test3 --batch-size 16 --fold 1 --bert-path ../../bert_models/bert_base_uncased/ --train-file train_v2.pkl
+# python train3.py train test3 --batch-size 16 --fold 2 --bert-path ../../bert_models/bert_base_uncased/ --train-file train_v2.pkl
+# python train3.py train test3 --batch-size 16 --fold 3 --bert-path ../../bert_models/bert_base_uncased/ --train-file train_v2.pkl
+# python train3.py train test3 --batch-size 16 --fold 4 --bert-path ../../bert_models/bert_base_uncased/ --train-file train_v2.pkl
 
 
 # python train3.py validate test3 --batch-size 16 --post
@@ -18,14 +18,14 @@ cd ../src
 # python train3_roberta.py train test3_roberta2 --batch-size 16 --fold 4
 # python train3_roberta.py validate test3_roberta2 --batch-size 16 --fold 4 --post
 
-# python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --bert-path ../../bert_models/roberta_base/ #--clean
+python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --bert-path ../../bert_models/roberta_base/ --post #--clean
 # python train3_roberta.py validate test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --bert-path ../../bert_models/roberta_base/ --post #--clean
-# python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 1 --bert-path ../../bert_models/roberta_base/
-# python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 2 --bert-path ../../bert_models/roberta_base/
-# python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 3 --bert-path ../../bert_models/roberta_base/
-# python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 4 --bert-path ../../bert_models/roberta_base/
+python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post 
+python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post 
+python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post 
+python train3_roberta.py train test3_roberta3 --batch-size 16 --train-file train_roberta_v3.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post 
 
-python train_roberta_v2.py train test4_roberta3 --batch-size 16 --train-file train_roberta_v4.pkl #--bert-path ../../bert_models/roberta_base/
+# python train_roberta_v2.py train test4_roberta3 --batch-size 16 --train-file train_roberta_v4.pkl #--bert-path ../../bert_models/roberta_base/
 # python train_roberta_v2.py train test4_roberta3 --batch-size 16 --train-file train_roberta_v4.pkl --bert-path ../../bert_models/roberta_base/ --fold 1
 # python train_roberta_v2.py train test4_roberta3 --batch-size 16 --train-file train_roberta_v4.pkl --bert-path ../../bert_models/roberta_base/ --fold 2
 # python train_roberta_v2.py train test4_roberta3 --batch-size 16 --train-file train_roberta_v4.pkl --bert-path ../../bert_models/roberta_base/ --fold 3
