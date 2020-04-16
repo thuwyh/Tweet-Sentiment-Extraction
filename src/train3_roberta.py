@@ -51,13 +51,12 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
-        # if self._mode=='train':
-        #     r = random.random()
-        #     if r<0.3:
-        #         sentiment = 'unk'
             
         inputs = self._tokenizer.encode_plus(
             sentiment, self._tokens[idx], return_tensors='pt')
+            # ,
+            # max_length=120, pad_to_max_length=True,
+            # truncation_strategy="only_second")
 
         toksn_id = inputs['input_ids'][0]
         # type_id = inputs['token_type_ids'][0]
@@ -105,7 +104,7 @@ class TweetModel(nn.Module):
         seq_output, pooled_output = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
         out = self.head(pooled_output)
-        se_out = self.ext_head(self.dropout(seq_output))
+        se_out = self.ext_head(seq_output)  #self.dropout()
         return out, se_out[:, :, 0], se_out[:, :, 1]
 
 
@@ -293,7 +292,7 @@ def main():
         model = TweetModel(config=config)
         load_model(model, run_root / ('best-model-%d.pt' % args.fold))
         model.cuda()
-        model = amp.initialize(model, opt_level="O2", verbosity=0)
+        # model = amp.initialize(model, opt_level="O2", verbosity=0)
         if args.multi_gpu == 1:
             model = nn.DataParallel(model)
 
@@ -313,15 +312,17 @@ def main():
         data = []
         for text in test['text'].tolist():
             split_text = text.split()
-            tokens, invert_map = [], []
+            tokens, invert_map, first_token = [], [], []
             for idx, w in enumerate(split_text):
-                for token in tokenizer.tokenize(w):
+                for idx2, token in enumerate(tokenizer.tokenize(' '+w)):
                     tokens.append(token)
                     invert_map.append(idx)
-            data.append((tokens, invert_map))
-        tokens, invert_map = zip(*data)
+                    first_token.append(True if idx2==0 else False)
+            data.append((tokens, invert_map, first_token))
+        tokens, invert_map, first_token = zip(*data)
         test['tokens'] = tokens
         test['invert_map'] = invert_map
+        test['first_token'] = first_token
         senti2label = {
             'positive':2,
             'negative':0,
@@ -343,8 +344,8 @@ def main():
             if args.multi_gpu == 1:
                 model = nn.DataParallel(model)
             all_senti_preds, all_start_preds, all_end_preds = predict(
-                model, test, test_loader, args)
-            preds = get_predicts(all_senti_preds, all_start_preds, all_end_preds, test)
+                model, test, test_loader, args, progress=True)
+            preds = get_predicts(all_senti_preds, all_start_preds, all_end_preds, test, args)
         if args.mode == 'predict5':
             all_start_preds, all_end_preds = [], []
             for fold in range(5):
@@ -354,7 +355,7 @@ def main():
                 all_start_preds.append(fold_start_preds)
                 all_end_preds.append(fold_end_preds)
             all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, test)
-            preds = get_predicts(None, all_start_preds, all_end_preds, test)
+            preds = get_predicts(None, all_start_preds, all_end_preds, test, args)
 
         test['selected_text'] = preds
         test[['textID','selected_text']].to_csv('submission.csv', index=False)
@@ -378,6 +379,8 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
 
     update_progress_steps = int(epoch_length / args.batch_size / 100)
     loss_fn = nn.CrossEntropyLoss()
+    # loss_fn = nn.NLLLoss()
+
     for epoch in range(start_epoch, start_epoch + n_epochs):
         model.train()
         tq = tqdm.tqdm(total=epoch_length)
@@ -395,17 +398,13 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             # emb = emb_layer(inputs) , input_emb=emb
             # if random.random() < 1.8:
             senti_out, start_out, end_out = model(inputs, masks, types)
+            start_out = start_out.masked_fill(~masks.bool(), -1000)
+            end_out = end_out.masked_fill(~masks.bool(), -1000)
             # 正常loss
             start_loss = loss_fn(start_out, starts)
             end_loss = loss_fn(end_out, ends)
             loss = (start_loss+end_loss)/2
-            # else:
-            #     masks[:, 1:4] = ~masks[:, 1:4]
-            #     senti_out, start_out, end_out = model(inputs, masks, types)
-            #     senti_loss = loss_fn(senti_out, targets)
-            #     start_loss = loss_fn(start_out, starts)
-            #     end_loss = loss_fn(end_out, ends)
-            #     loss = (start_loss+end_loss)/2 #senti_loss#
+
             loss /= args.step
 
             if args.fp16:
@@ -474,26 +473,13 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_
             inputs = inputs.cuda()
             types = None
             senti_out, start_out, end_out = model(inputs, masks, types)
-            start_out.masked_fill(~masks.bool(), -100)
-            end_out.masked_fill(~masks.bool(), -100)
-
-            # masks[:,1:4]=~masks[:,1:4]
-            senti_out2, start_out2, end_out2 = model(inputs, masks, types)
-            
-            masks = masks.cpu().numpy().astype(np.int)
-            if not for_ensemble:
-                senti_pred = torch.argmax(senti_out2, dim=-1)
-                start_out = torch.softmax(start_out+0.0*start_out2, dim=-1).cpu().numpy()
-                end_out = torch.softmax(end_out+0.0*end_out2, dim=-1).cpu().numpy()
-                all_senti_pred.append(senti_pred.cpu().numpy())
-                for idx in range(len(senti_pred)):
-                    start, end = get_best_pred(start_out[idx, :], end_out[idx, :], np.sum(masks[idx, :]-2), offset=4)
-                    all_start_pred.append(start)
-                    all_end_pred.append(end)
-            else:
-                all_senti_pred.append(senti_out2.cpu().numpy())
-                all_start_pred.append(start_out.cpu())
-                all_end_pred.append(end_out.cpu())
+            start_out = start_out.masked_fill(~masks.bool(), -1000)
+            end_out= end_out.masked_fill(~masks.bool(), -1000)
+            all_senti_pred.append(np.argmax(senti_out.cpu().numpy(), axis=-1))
+            for idx in range(len(start_out)):
+                all_start_pred.append(start_out[idx,:].cpu())
+                all_end_pred.append(end_out[idx,:].cpu())
+            assert all_start_pred[-1].dim()==1
 
     all_senti_pred = np.concatenate(all_senti_pred)
     if progress:
@@ -508,7 +494,6 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
         model, valid_df, valid_loader, args)
     metrics = get_metrics(all_senti_preds, all_start_preds,
                           all_end_preds, valid_df, args)
-
     return metrics
 
 

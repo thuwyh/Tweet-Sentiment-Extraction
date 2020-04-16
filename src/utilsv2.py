@@ -132,9 +132,6 @@ def ensemble(senti_preds, start_preds, end_preds, df):
         start_out = start_out/model_num
         end_out = end_out/model_num
 
-        start_out = torch.softmax(start_out, dim=-1).numpy()
-        end_out = torch.softmax(end_out, dim=-1).numpy()
-
         for idx in range(len(end_out)):
             start, end = get_best_pred(
                 start_out[idx, :], end_out[idx, :], len(tokens[len(all_end_pred)]), offset=4)
@@ -144,8 +141,8 @@ def ensemble(senti_preds, start_preds, end_preds, df):
 
 
 def get_best_pred(start_pred, end_pred, text_len, offset=3):
-    top_start = np.argsort(start_pred)[::-1] # start can not be the last token  [offset:text_len+offset]
-    top_end = np.argsort(end_pred)[::-1]  # [offset:text_len+offset]
+    top_start = np.argsort(torch.softmax(start_pred, dim=-1).numpy())[::-1] # start can not be the last token  [offset:text_len+offset]
+    top_end = np.argsort(torch.softmax(end_pred, dim=-1).numpy())[::-1]  # [offset:text_len+offset]
     preds = []
     for start in top_start[:30]:
         for end in top_end[:30]:
@@ -156,50 +153,18 @@ def get_best_pred(start_pred, end_pred, text_len, offset=3):
             if end >= start:
                 preds.append((start, end, start_pred[start]+end_pred[end]))
     preds = sorted(preds, key=lambda x: x[2], reverse=True)
-    # top_start = np.argmax(start_pred)-offset
-    # top_end = np.argmax(end_pred)-offset
     if len(preds)==0:
         print(top_start[:30], top_end[:30])
         return 0, 0
     else:
         return preds[0][0]-offset, preds[0][1]-offset
-    # return top_start, top_end
 
-
-def get_predicts(all_senti_preds, all_start_preds, all_end_preds, valid_df):
+def get_predicts(all_senti_preds, all_start_preds, all_end_preds, valid_df, args):
     invert_maps = valid_df['invert_map'].tolist()
     texts = valid_df['text'].tolist()
-    preds = []
-    for idx in range(len(texts)):
-        text = texts[idx]
-        words = text.lower().split()
-        invert_map = invert_maps[idx]
-
-        start_word = invert_map[all_start_preds[idx]]
-        end_word = invert_map[all_end_preds[idx]]
-        selected_text_pred = ' '.join(words[start_word:end_word+1])
-
-        if idx < 20:
-            print(selected_text_pred)
-        preds.append(selected_text_pred)
-    return preds
-
-
-def get_metrics(all_senti_preds, all_start_preds, all_end_preds, valid_df, args=None):
-    all_senti_labels = valid_df['senti_label'].values
-    metrics = dict()
-    metrics['loss'] = 0
-    metrics['senti_acc'] = accuracy_score(all_senti_labels, all_senti_preds)
-
-    invert_maps = valid_df['invert_map'].tolist()
-    starts = valid_df['start'].tolist()
-    ends = valid_df['end'].tolist()
-    texts = valid_df['text'].tolist()
-    selected_texts = valid_df['selected_text'].tolist()
-    first_tokens = valid_df['first_token'].tolist()
     tokens = valid_df['tokens'].tolist()
-
-    score, score_dirty, score_dirty2 = 0, 0, 0
+    all_senti_labels = valid_df['senti_label'].values
+    preds = []
     for idx in range(len(texts)):
         text = texts[idx]
         words = text.lower().split()
@@ -210,18 +175,56 @@ def get_metrics(all_senti_preds, all_start_preds, all_end_preds, valid_df, args=
             end_word = invert_map[all_end_preds[idx]]+1
             token_string = args.tokenizer.convert_tokens_to_string(tokens[idx][all_start_preds[idx]:all_end_preds[idx]+1])
             orig_text = ' '.join(words[start_word:end_word])
+            selected_text_pred = ' '.join(get_final_text(token_string, orig_text, True).split())
+        else:
+            start_word, end_word = 0, 0
+            selected_text_pred = words[start_word:end_word]
+            selected_text_pred = ' '.join(selected_text_pred)
+
+        if args.post:
+            if all_senti_labels[idx]==1:
+                selected_text_pred = ' '.join(words)
+
+        if idx < 20:
+            print(selected_text_pred)
+        preds.append(selected_text_pred)
+    return preds
+
+
+def get_metrics(all_senti_preds, all_start_preds, all_end_preds, valid_df, args=None):  
+    metrics = dict()
+    metrics['loss'] = 0
+    invert_maps = valid_df['invert_map'].tolist()
+    starts = valid_df['start'].tolist()
+    ends = valid_df['end'].tolist()
+    texts = valid_df['text'].tolist()
+    all_senti_labels = valid_df['senti_label'].values
+    selected_texts = valid_df['selected_text'].tolist()
+    first_tokens = valid_df['first_token'].tolist()
+    tokens = valid_df['tokens'].tolist()
+    print(all_senti_preds.shape)
+    metrics['senti_acc'] = accuracy_score(all_senti_labels, all_senti_preds)
+    loss_fn = torch.nn.CrossEntropyLoss()
+    metrics['loss'] = 0
+    score, score_dirty, score_dirty2 = 0, 0, 0
+    for idx in range(len(texts)):
+        text = texts[idx]
+        words = text.lower().split()
+        invert_map = invert_maps[idx]
+
+        metrics['loss']+=(loss_fn(all_start_preds[idx].unsqueeze(0), torch.LongTensor([starts[idx]]))+ \
+                          loss_fn(all_end_preds[idx].unsqueeze(0), torch.LongTensor([ends[idx]]))).item()/2
+        
+        pred_start, pred_end = get_best_pred(all_start_preds[idx], all_end_preds[idx], None, offset=4)
+        
+        if 0<=pred_start<len(invert_map) and 0<=pred_end<len(invert_map) and pred_end>=pred_start:
+            start_word = invert_map[pred_start]
+            end_word = invert_map[pred_end]+1
+            
+            token_string = args.tokenizer.convert_tokens_to_string(tokens[idx][pred_start:pred_end+1])
+            orig_text = ' '.join(words[start_word:end_word])
             pred = ' '.join(get_final_text(token_string, orig_text, True).split())
-            # for pos in range(all_start_preds[idx], all_end_preds[idx]+1):
-            #     if first_tokens[idx][pos]:
-            #         pred += ' '
-            #     if len(tokens[idx][pos])>2 and tokens[idx][pos].startswith('##'):
-            #         # bert
-            #         pred += tokens[idx][pos][2:]
-            #     elif tokens[idx][pos].startswith('Ġ'):
-            #         # roberta
-            #         pred += tokens[idx][pos][1:]
-            #     else:
-            #         pred += tokens[idx][pos]
+            pred = ' '.join(token_string.split())
         else:
             start_word, end_word = 0, 0
         selected_text_pred = words[start_word:end_word]
@@ -245,7 +248,9 @@ def get_metrics(all_senti_preds, all_start_preds, all_end_preds, valid_df, args=
     metrics['score'] = score/len(texts)
     metrics['dirty_score'] = score_dirty/len(texts)
     metrics['dirty_score2'] = score_dirty2/len(texts)
+    metrics['loss'] = metrics['loss']/len(texts)
     print('senti_acc:', metrics['senti_acc'], 
+            'loss', metrics['loss'],
           'jaccard:', metrics['score'], 
           'dirty jaccard:', metrics['dirty_score'],
           'score2', metrics['dirty_score2'])

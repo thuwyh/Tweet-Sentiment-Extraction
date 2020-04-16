@@ -21,7 +21,8 @@
             "program": "${file}",
             "console": "integratedTerminal",
             "justMyCode": false,
-            "args": ["validate","test"],
+            "args": ["validate","test3_roberta3","--train-file",
+            "train_roberta_v3.pkl","--bert-path","../../bert_models/roberta_base/","--limit", "1600"],
             "cwd": "${workspaceFolder}/src"
         },
         {
