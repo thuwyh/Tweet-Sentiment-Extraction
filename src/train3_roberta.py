@@ -104,7 +104,7 @@ class TweetModel(nn.Module):
         seq_output, pooled_output = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
         out = self.head(pooled_output)
-        se_out = self.ext_head(seq_output)  #self.dropout()
+        se_out = self.ext_head(self.dropout(seq_output))  #()
         return out, se_out[:, :, 0], se_out[:, :, 1]
 
 

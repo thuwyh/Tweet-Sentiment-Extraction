@@ -19,12 +19,12 @@ from sklearn.model_selection import GroupKFold
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader, Dataset, WeightedRandomSampler
-from transformers import RobertaConfig, RobertaModel, RobertaTokenizer
+from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoConfig, AutoModel, AutoTokenizer
 from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup)
 
-from utilsv2 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble,
-                   load_model, save_model, set_seed, write_event, get_metrics, get_predicts)
+from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble,
+                   load_model, save_model, set_seed, write_event, evaluate, get_predicts)
 
 
 class TrainDataset(Dataset):
@@ -34,6 +34,7 @@ class TrainDataset(Dataset):
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
         self._sentiment = data['sentiment'].tolist()
+        self._inst = data['in_st'].tolist()
         # self._qid = data['qid'].tolist()
         self._data = data
         self._mode = mode
@@ -51,34 +52,35 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
-        # if self._mode=='train':
-        #     r = random.random()
-        #     if r<0.3:
-        #         sentiment = 'unk'
-            
+        
         inputs = self._tokenizer.encode_plus(
             sentiment, self._tokens[idx], return_tensors='pt')
+            # ,
+            # max_length=120, pad_to_max_length=True,
+            # truncation_strategy="only_second")
 
-        toksn_id = inputs['input_ids'][0]
-        type_id = inputs['token_type_ids'][0]
+        token_id = inputs['input_ids'][0]
+        # type_id = inputs['token_type_ids'][0]
         mask = inputs['attention_mask'][0]
         if self._mode == 'train':
+            inst = [-100]*4+self._inst[idx]+[-100]
             start = self._start[idx]+4
             end = self._end[idx]+4
         else:
             start, end = 0, 0
-        return toksn_id, type_id, mask, self._sentilabel[idx], start, end
+            inst = [-100]*len(token_id)
+        return token_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst)
 
 
 def collate_fn(batch):
-    tokens, types, masks, label, start, end = zip(*batch)
+    tokens, masks, label, start, end, inst = zip(*batch)
     tokens = pad_sequence(tokens, batch_first=True, padding_value=1)
-    types = pad_sequence(types, batch_first=True, padding_value=0)
     masks = pad_sequence(masks, batch_first=True, padding_value=0)
     label = torch.LongTensor(label)
     start = torch.LongTensor(start)
     end = torch.LongTensor(end)
-    return tokens, types, masks, label, start, end
+    inst = pad_sequence(inst, batch_first=True, padding_value=-100)
+    return tokens, masks, label, start, end, inst
 
 
 class TweetModel(nn.Module):
@@ -86,9 +88,9 @@ class TweetModel(nn.Module):
     def __init__(self, pretrain_path=None, dropout=0.2, config=None):
         super(TweetModel, self).__init__()
         if config is not None:
-            self.bert = RobertaModel(config)
+            self.bert = AutoModel.from_config(config)
         else:
-            self.bert = RobertaModel.from_pretrained(
+            self.bert = AutoModel.from_pretrained(
                 pretrain_path, cache_dir=None)
         self.head = nn.Sequential(
             OrderedDict([
@@ -100,13 +102,16 @@ class TweetModel(nn.Module):
                 ('se', nn.Linear(self.bert.config.hidden_size, 2))
             ])
         )
+        self.inst_head = nn.Linear(self.bert.config.hidden_size, 2)
+        self.dropout = nn.Dropout(0.1)
 
     def forward(self, inputs, masks, token_type_ids=None, input_emb=None):
         seq_output, pooled_output = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
         out = self.head(pooled_output)
-        se_out = self.ext_head(seq_output)
-        return out, se_out[:, :, 0], se_out[:, :, 1]
+        se_out = self.ext_head(self.dropout(seq_output))  #()
+        inst_out = self.inst_head(self.dropout(seq_output))
+        return out, se_out[:, :, 0], se_out[:, :, 1], inst_out
 
 
 def main():
@@ -125,15 +130,15 @@ def main():
     arg('--fold', type=int, default=0)
     arg('--multi-gpu', type=int, default=0)
 
-    arg('--bert-path', type=str, default='../../bert_models/roberta_large/')
-    arg('--train-file', type=str, default='train_roberta.pkl')
+    arg('--bert-path', type=str, default='../../bert_models/roberta_base/')
+    arg('--train-file', type=str, default='train_roberta_v3.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
+    arg('--no-neutral', action='store_true')
 
     arg('--epsilon', type=float, default=0.3)
-
     arg('--max-len', type=int, default=200)
-
+    arg('--fp16', action='store_true')
     arg('--lr-layerdecay', type=float, default=1.0)
     arg('--max_grad_norm', type=float, default=-1.0)
     arg('--weight_decay', type=float, default=0.0)
@@ -149,11 +154,13 @@ def main():
 
     run_root = Path('../experiments/' + args.run_root)
     DATA_ROOT = Path('../input/')
-    tokenizer = RobertaTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=True)
-
+    tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=True)
+    args.tokenizer = tokenizer
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
         folds = pd.read_pickle(DATA_ROOT / args.train_file)
         train_fold = folds[folds['fold'] != args.fold]
+        if args.no_neutral:
+            train_fold = train_fold[train_fold['sentiment']!='neutral']
         valid_fold = folds[folds['fold'] == args.fold]
         print(valid_fold.shape)
         print('training fold:', args.fold)
@@ -165,8 +172,8 @@ def main():
         if run_root.exists() and args.clean:
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
-        (run_root / 'params.json').write_text(
-            json.dumps(vars(args), indent=4, sort_keys=True))
+        # (run_root / 'params.json').write_text(
+        #     json.dumps(vars(args), indent=4, sort_keys=True, skipkeys=True))
 
         training_set = TrainDataset(
             train_fold, vocab_path=args.vocab_path, do_lower=True)
@@ -193,8 +200,9 @@ def main():
         ]
         optimizer = AdamW(optimizer_grouped_parameters,
                           lr=args.lr, eps=args.adam_epsilon)
-        model, optimizer = amp.initialize(
-            model, optimizer, opt_level="O2", verbosity=0)
+        if args.fp16:
+            model, optimizer = amp.initialize(
+                model, optimizer, opt_level="O2", verbosity=0)
 
         total_steps = int(len(train_fold) * args.n_epochs / args.step / args.batch_size)
         warmup_steps = int(0.1 * total_steps)
@@ -210,7 +218,7 @@ def main():
               valid_loader=valid_loader, epoch_length=len(training_loader)*args.batch_size)
 
     elif args.mode == 'validate5':
-        config = RobertaConfig(args.bert_path+'config.json')
+        config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
         folds['pred'] = 0
         for fold in range(5):
@@ -219,66 +227,13 @@ def main():
             model.cuda()
             valid_set = TrainDataset(
                 valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
-            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=partial(collate_fn, tokenizer=tokenizer),
+            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
                                       num_workers=args.workers)
-            valid_pred = predict(
+            all_senti_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            if args.swap:
-                valid_set.swap()
-                valid_pred2 = predict(
-                    model, valid_fold, valid_loader, args, progress=True)
-                valid_pred = np.mean([valid_pred, valid_pred2], axis=0)
-
-            folds.loc[valid_fold.index, 'pred'] = valid_pred
-
-        folds.to_csv(run_root / 'new_train_with_pred.csv', index=False)
-
-    elif args.mode == 'teacherpred':
-        config = RobertaConfig(args.bert_path+'config.json')
-        model = TweetModel(config=config)
-        folds['pred'] = 0
-        for fold in range(5):
-            valid_fold = folds[folds['fold'] == fold]
-            load_model(model, run_root / ('best-model-%d.pt' % fold))
-            model.cuda()
-            valid_set = TrainDataset(
-                valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
-            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=partial(collate_fn, tokenizer=tokenizer),
-                                      num_workers=args.workers)
-            valid_pred = predict(model, valid_fold, valid_loader,
-                                 args, progress=True, temperature=args.temperature)
-            if args.swap:
-                valid_set.swap()
-                valid_pred2 = predict(
-                    model, valid_fold, valid_loader, args, progress=True, temperature=args.temperature)
-                valid_pred = np.mean([valid_pred, valid_pred2], axis=0)
-
-            folds.loc[valid_fold.index, 'pred'] = valid_pred
-
-        folds.to_csv(run_root / args.output_file, index=False)
-
-    elif args.mode == 'validate55':
-        config = RobertaConfig(args.bert_path+'config.json')
-        model = TweetModel(config=config)
-        folds['pred'] = 0
-        preds = []
-        for fold in range(5):
-            load_model(model, run_root / ('best-model-%d.pt' % fold))
-            model.cuda()
-            valid_set = TrainDataset(
-                valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
-            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=partial(collate_fn, tokenizer=tokenizer),
-                                      num_workers=args.workers)
-            valid_pred = predict(
-                model, valid_fold, valid_loader, args, progress=True)
-            preds.append(valid_pred)
-            if args.swap:
-                valid_set.swap()
-                valid_pred2 = predict(
-                    model, valid_fold, valid_loader, args, progress=True)
-                preds.append(valid_pred2)
-        preds = np.mean(preds, axis=0)
-        m1 = get_metrics(preds, valid_fold['label'], 'all')
+            word_preds, token_preds = get_predicts(all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
+            folds.loc[valid_fold.index, 'pred'] = word_preds
+        folds[['sentiment','text','selected_text','pred']].to_csv(run_root / 'all_preds.csv', index=False, sep='\t')
 
     elif args.mode == 'validate':
         valid_set = TrainDataset(
@@ -286,19 +241,19 @@ def main():
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
                                   num_workers=args.workers)
         valid_result = valid_fold.copy()
-        config = RobertaConfig.from_pretrained(args.bert_path)
+        config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
         load_model(model, run_root / ('best-model-%d.pt' % args.fold))
         model.cuda()
-        model = amp.initialize(model, opt_level="O2", verbosity=0)
+        # model = amp.initialize(model, opt_level="O2", verbosity=0)
         if args.multi_gpu == 1:
             model = nn.DataParallel(model)
 
-        all_senti_preds, all_start_preds, all_end_preds = predict(
+        all_senti_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
             model, valid_fold, valid_loader, args, progress=True)
 
-        metrics = get_metrics(
-            all_senti_preds, all_start_preds, all_end_preds, valid_fold, args)
+        metrics = evaluate(
+            all_senti_preds, all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
 
         # valid_result['predict'] = valid_pred
         # valid_result.to_csv(run_root / args.output_file, index=False)
@@ -310,15 +265,17 @@ def main():
         data = []
         for text in test['text'].tolist():
             split_text = text.split()
-            tokens, invert_map = [], []
+            tokens, invert_map, first_token = [], [], []
             for idx, w in enumerate(split_text):
-                for token in tokenizer.tokenize(w):
+                for idx2, token in enumerate(tokenizer.tokenize(' '+w)):
                     tokens.append(token)
                     invert_map.append(idx)
-            data.append((tokens, invert_map))
-        tokens, invert_map = zip(*data)
+                    first_token.append(True if idx2==0 else False)
+            data.append((tokens, invert_map, first_token))
+        tokens, invert_map, first_token = zip(*data)
         test['tokens'] = tokens
         test['invert_map'] = invert_map
+        test['first_token'] = first_token
         senti2label = {
             'positive':2,
             'negative':0,
@@ -329,7 +286,7 @@ def main():
         test_set = TrainDataset(test, vocab_path=args.vocab_path, mode='test', max_len=args.max_len)
         test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
                                  num_workers=args.workers)
-        config = RobertaConfig.from_pretrained(args.bert_path)
+        config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
         
         if args.mode == 'predict':
@@ -340,8 +297,8 @@ def main():
             if args.multi_gpu == 1:
                 model = nn.DataParallel(model)
             all_senti_preds, all_start_preds, all_end_preds = predict(
-                model, test, test_loader, args)
-            preds = get_predicts(all_senti_preds, all_start_preds, all_end_preds, test)
+                model, test, test_loader, args, progress=True)
+            preds = get_predicts(all_senti_preds, all_start_preds, all_end_preds, test, args)
         if args.mode == 'predict5':
             all_start_preds, all_end_preds = [], []
             for fold in range(5):
@@ -351,7 +308,7 @@ def main():
                 all_start_preds.append(fold_start_preds)
                 all_end_preds.append(fold_end_preds)
             all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, test)
-            preds = get_predicts(None, all_start_preds, all_end_preds, test)
+            preds = get_predicts(None, all_start_preds, all_end_preds, test, args)
 
         test['selected_text'] = preds
         test[['textID','selected_text']].to_csv('submission.csv', index=False)
@@ -374,39 +331,41 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
                             args.fold).open('at', encoding='utf8')
 
     update_progress_steps = int(epoch_length / args.batch_size / 100)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+    # loss_fn = nn.NLLLoss()
+
     for epoch in range(start_epoch, start_epoch + n_epochs):
         model.train()
         tq = tqdm.tqdm(total=epoch_length)
         losses = []
         mean_loss = 0
-        for i, (inputs, types, masks, targets, starts, ends) in enumerate(train_loader):
+        for i, (inputs, masks, targets, starts, ends, inst) in enumerate(train_loader):
             lr = get_learning_rate(optimizer)
             batch_size, length = inputs.size(0), inputs.size(1)
             masks = masks.cuda()
             inputs, targets = inputs.cuda(), targets.cuda()
-            types = types.cuda()
-            starts, ends = starts.cuda(), ends.cuda()
+            types = None
+            starts, ends, inst = starts.cuda(), ends.cuda(), inst.cuda()
 
             # emb_layer = model.bert.get_input_embeddings()
             # emb = emb_layer(inputs) , input_emb=emb
             # if random.random() < 1.8:
-            senti_out, start_out, end_out = model(inputs, masks, types)
+            senti_out, start_out, end_out, inst_out = model(inputs, masks, types)
+            start_out = start_out.masked_fill(~masks.bool(), -1000)
+            end_out = end_out.masked_fill(~masks.bool(), -1000)
             # 正常loss
             start_loss = loss_fn(start_out, starts)
             end_loss = loss_fn(end_out, ends)
-            loss = (start_loss+end_loss)/2
-            # else:
-            #     masks[:, 1:4] = ~masks[:, 1:4]
-            #     senti_out, start_out, end_out = model(inputs, masks, types)
-            #     senti_loss = loss_fn(senti_out, targets)
-            #     start_loss = loss_fn(start_out, starts)
-            #     end_loss = loss_fn(end_out, ends)
-            #     loss = (start_loss+end_loss)/2 #senti_loss#
+            inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
+            loss = (start_loss+end_loss)/2+inst_loss
+
             loss /= args.step
 
-            with amp.scale_loss(loss, optimizer) as scaled_loss:
-                scaled_loss.backward()
+            if args.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
 
             # grad = torch.cat([emb_layer.weight.grad.index_select(0, inputs[i]) for i in range(len(inputs))])
             # grad = grad.view(batch_size,length, -1)
@@ -422,8 +381,11 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             #     scaled_loss.backward()
             if i%args.step==0:
                 if args.max_grad_norm > 0:
-                    torch.nn.utils.clip_grad_norm_(
-                        amp.master_params(optimizer), args.max_grad_norm)
+                    if args.fp16:
+                        torch.nn.utils.clip_grad_norm_(
+                            amp.master_params(optimizer), args.max_grad_norm)
+                    else:
+                        torch.nn.utils.clip_grad_norm(model.parameters(), args.max_grad_norm)
                 optimizer.step()
                 optimizer.zero_grad()
                 scheduler.step()
@@ -453,53 +415,41 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
 def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_ensemble=False) -> Dict[str, float]:
     # run_root = Path('../experiments/' + args.run_root)
     model.eval()
-    all_end_pred, all_senti_pred, all_start_pred = [], [], []
+    all_end_pred, all_senti_pred, all_start_pred, all_inst_out = [], [], [], []
     if progress:
         tq = tqdm.tqdm(total=len(valid_df))
     with torch.no_grad():
-        for inputs, types, masks, _, _, _ in valid_loader:
+        for inputs, masks, _, _, _, _ in valid_loader:
             if progress:
                 batch_size = inputs.size(0)
                 tq.update(batch_size)
             masks = masks.cuda()
             inputs = inputs.cuda()
-            types = types.cuda()
-            senti_out, start_out, end_out = model(inputs, masks, types)
-            start_out.masked_fill(~masks.bool(), -100)
-            end_out.masked_fill(~masks.bool(), -100)
-
-            # masks[:,1:4]=~masks[:,1:4]
-            senti_out2, start_out2, end_out2 = model(inputs, masks, types)
-            
-            masks = masks.cpu().numpy().astype(np.int)
-            if not for_ensemble:
-                senti_pred = torch.argmax(senti_out2, dim=-1)
-                start_out = torch.softmax(start_out+0.0*start_out2, dim=-1).cpu().numpy()
-                end_out = torch.softmax(end_out+0.0*end_out2, dim=-1).cpu().numpy()
-                all_senti_pred.append(senti_pred.cpu().numpy())
-                for idx in range(len(senti_pred)):
-                    start, end = get_best_pred(start_out[idx, :], end_out[idx, :], np.sum(masks[idx, :]-2), offset=4)
-                    all_start_pred.append(start)
-                    all_end_pred.append(end)
-            else:
-                all_senti_pred.append(senti_out2.cpu().numpy())
-                all_start_pred.append(start_out.cpu())
-                all_end_pred.append(end_out.cpu())
+            types = None
+            senti_out, start_out, end_out, inst_out = model(inputs, masks, types)
+            start_out = start_out.masked_fill(~masks.bool(), -1000)
+            end_out= end_out.masked_fill(~masks.bool(), -1000)
+            all_senti_pred.append(np.argmax(senti_out.cpu().numpy(), axis=-1))
+            inst_out = torch.softmax(inst_out, dim=-1)
+            for idx in range(len(start_out)):
+                all_start_pred.append(start_out[idx,:].cpu())
+                all_end_pred.append(end_out[idx,:].cpu())
+                all_inst_out.append(inst_out[idx,:,1].cpu())
+            assert all_start_pred[-1].dim()==1
 
     all_senti_pred = np.concatenate(all_senti_pred)
     if progress:
         tq.close()
-    return all_senti_pred, all_start_pred, all_end_pred
+    return all_senti_pred, all_start_pred, all_end_pred, all_inst_out
 
 
 def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False, progress=False):
     run_root = Path('../experiments/' + args.run_root)
 
-    all_senti_preds, all_start_preds, all_end_preds = predict(
+    all_senti_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
-    metrics = get_metrics(all_senti_preds, all_start_preds,
-                          all_end_preds, valid_df)
-
+    metrics = evaluate(all_senti_preds, all_start_preds,
+                          all_end_preds, all_inst_out, valid_df, args)
     return metrics
 
 
