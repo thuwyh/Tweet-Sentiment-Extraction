@@ -351,8 +351,8 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             # emb = emb_layer(inputs) , input_emb=emb
             # if random.random() < 1.8:
             senti_out, start_out, end_out, inst_out = model(inputs, masks, types)
-            start_out = start_out.masked_fill(~masks.bool(), -1000)
-            end_out = end_out.masked_fill(~masks.bool(), -1000)
+            start_out = start_out.masked_fill(~masks.bool(), -10000.0)
+            end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             # 正常loss
             start_loss = loss_fn(start_out, starts)
             end_loss = loss_fn(end_out, ends)
@@ -401,7 +401,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
         tq.close()
         valid_metrics = validation(model, valid_df, valid_loader, args)
         write_event(log, step, epoch=epoch, **valid_metrics)
-        current_score = valid_metrics['score']
+        current_score = valid_metrics['dirty_score_word']
         save_model(model, str(model_path), current_score, epoch + 1)
         if current_score > best_valid_score:
             best_valid_score = current_score
