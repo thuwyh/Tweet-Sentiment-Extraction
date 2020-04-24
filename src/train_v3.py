@@ -131,7 +131,7 @@ def main():
     arg('--multi-gpu', type=int, default=0)
 
     arg('--bert-path', type=str, default='../../bert_models/roberta_base/')
-    arg('--train-file', type=str, default='train_roberta_v3.pkl')
+    arg('--train-file', type=str, default='train_roberta.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
     arg('--no-neutral', action='store_true')
@@ -371,18 +371,6 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             else:
                 loss.backward()
 
-            # grad = torch.cat([emb_layer.weight.grad.index_select(0, inputs[i]) for i in range(len(inputs))])
-            # grad = grad.view(batch_size,length, -1)
-            # # 扰动
-            # norm = torch.norm(grad, dim=(1,2))+1e-8
-            # noise = args.epsilon * grad / norm.unsqueeze(1).unsqueeze(1)
-            # noise[torch.isnan(noise)]=0
-            # emb = emb_layer(inputs)
-            # adv_outputs = model(None, token_types, masks, input_emb=emb + noise.detach())
-            # adv_loss = loss_fn(adv_outputs, targets.view(-1, 1)) / args.step
-
-            # with amp.scale_loss(adv_loss, optimizer) as scaled_loss:
-            #     scaled_loss.backward()
             if i%args.step==0:
                 if args.max_grad_norm > 0:
                     if args.fp16:
