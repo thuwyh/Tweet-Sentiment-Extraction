@@ -134,8 +134,7 @@ def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
 
 
 def ensemble(senti_preds, start_preds, end_preds, df):
-    # merge senti
-    # todo
+    # 在logit层面融合
 
     all_end_pred, all_start_pred = [], []
     tokens = df['tokens'].tolist()
@@ -150,11 +149,8 @@ def ensemble(senti_preds, start_preds, end_preds, df):
         start_out = start_out/model_num
         end_out = end_out/model_num
 
-        for idx in range(len(end_out)):
-            start, end = get_best_pred(
-                start_out[idx, :], end_out[idx, :], len(tokens[len(all_end_pred)]), offset=4)
-            all_start_pred.append(start)
-            all_end_pred.append(end)
+        all_start_pred.append(start_out)
+        all_end_pred.append(end_out)
     return all_start_pred, all_end_pred
 
 
@@ -175,7 +171,7 @@ def get_best_pred(start_pred, end_pred):
     else:
         return preds[0][0], preds[0][1]
 
-def get_predicts(all_start_preds, all_end_preds, all_inst_out, valid_df, args):
+def get_predicts(all_start_preds, all_end_preds, valid_df, args):
     texts = valid_df['text'].tolist()
     all_senti_labels = valid_df['senti_label'].values
     word_preds = []
@@ -206,7 +202,7 @@ def get_loss(pred, label):
     return retval/len(label)
 
 
-def evaluate(all_senti_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args=None):  
+def evaluate(all_senti_preds, all_start_preds, all_end_preds, valid_df, args=None):  
     metrics = dict()
     metrics['loss'] = 0
     invert_maps = valid_df['invert_map'].tolist()
@@ -224,7 +220,7 @@ def evaluate(all_senti_preds, all_start_preds, all_end_preds, all_inst_preds, va
     all_end_preds = map_to_word(all_end_preds, valid_df, args)
     
     clean_score_word, dirty_score_word = 0, 0
-    word_preds = get_predicts(all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
+    word_preds = get_predicts(all_start_preds, all_end_preds, valid_df, args)
 
     for idx in range(len(texts)):
         text = texts[idx]

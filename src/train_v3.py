@@ -118,7 +118,7 @@ def main():
     parser = argparse.ArgumentParser()
     arg = parser.add_argument
     arg('mode', choices=['train', 'validate', 'predict', 'predict5',
-                         'validate5', 'validate55', 'teacherpred'])
+                         'validate5', 'validate52'])
     arg('run_root')
     arg('--batch-size', type=int, default=16)
     arg('--step', type=int, default=1)
@@ -132,6 +132,7 @@ def main():
 
     arg('--bert-path', type=str, default='../../bert_models/roberta_base/')
     arg('--train-file', type=str, default='train_roberta.pkl')
+    arg('--local-test', type=str, default='localtest_roberta.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
     arg('--no-neutral', action='store_true')
@@ -172,8 +173,6 @@ def main():
         if run_root.exists() and args.clean:
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
-        # (run_root / 'params.json').write_text(
-        #     json.dumps(vars(args), indent=4, sort_keys=True, skipkeys=True))
 
         training_set = TrainDataset(
             train_fold, vocab_path=args.vocab_path, do_lower=True)
@@ -218,26 +217,48 @@ def main():
               valid_loader=valid_loader, epoch_length=len(training_loader)*args.batch_size)
 
     elif args.mode == 'validate5':
+        valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
         config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
         folds['pred'] = 0
+        all_start_preds, all_end_preds = [], []
         for fold in range(5):
-            valid_fold = folds[folds['fold'] == fold]
             load_model(model, run_root / ('best-model-%d.pt' % fold))
             model.cuda()
             valid_set = TrainDataset(
                 valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
             valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
                                       num_workers=args.workers)
-            all_senti_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
+            all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            all_start_preds = map_to_word(all_start_preds, valid_fold, args)
-            all_end_preds = map_to_word(all_end_preds, valid_fold, args)
-            word_preds = get_predicts(all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
-            folds.loc[valid_fold.index, 'pred'] = word_preds
-        folds[['sentiment','text','selected_text','pred']].to_csv(run_root / 'all_preds.csv', index=False, sep='\t')
+            all_start_preds.append(fold_start_pred)
+            all_end_preds.append(fold_end_pred)
+        all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
+        metrics = evaluate(
+            all_senti_preds, all_start_preds, all_end_preds, valid_fold, args)
+    elif args.mode == 'validate5':
+        valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
+        config = AutoConfig.from_pretrained(args.bert_path)
+        model = TweetModel(config=config)
+        folds['pred'] = 0
+        all_start_preds, all_end_preds = [], []
+        for fold in range(5):
+            load_model(model, run_root / ('best-model-%d.pt' % fold))
+            model.cuda()
+            valid_set = TrainDataset(
+                valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
+            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
+                                      num_workers=args.workers)
+            all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
+                model, valid_fold, valid_loader, args, progress=True)
+            all_start_preds.append(fold_start_pred)
+            all_end_preds.append(fold_end_pred)
+        all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
+        metrics = evaluate(
+            all_senti_preds, all_start_preds, all_end_preds, valid_fold, args)
 
     elif args.mode == 'validate':
+        valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
         valid_set = TrainDataset(
             valid_fold, vocab_path=args.vocab_path, mode='test')
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
@@ -247,7 +268,6 @@ def main():
         model = TweetModel(config=config)
         load_model(model, run_root / ('best-model-%d.pt' % args.fold))
         model.cuda()
-        # model = amp.initialize(model, opt_level="O2", verbosity=0)
         if args.multi_gpu == 1:
             model = nn.DataParallel(model)
 
@@ -256,9 +276,6 @@ def main():
 
         metrics = evaluate(
             all_senti_preds, all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
-
-        # valid_result['predict'] = valid_pred
-        # valid_result.to_csv(run_root / args.output_file, index=False)
 
     elif args.mode in ['predict', 'predict5']:
         test = pd.read_csv(DATA_ROOT / 'tweet-sentiment-extraction'/args.test_file)
