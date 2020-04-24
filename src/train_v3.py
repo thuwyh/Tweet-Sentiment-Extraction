@@ -24,7 +24,7 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup)
 
 from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble,
-                   load_model, save_model, set_seed, write_event, evaluate, get_predicts)
+                   load_model, save_model, set_seed, write_event, evaluate, get_predicts, map_to_word)
 
 
 class TrainDataset(Dataset):
@@ -143,7 +143,7 @@ def main():
     arg('--max_grad_norm', type=float, default=-1.0)
     arg('--weight_decay', type=float, default=0.0)
     arg('--adam-epsilon', type=float, default=1e-8)
-
+    arg('--offset', type=int, default=4)
     arg('--best-loss', action='store_true')
     arg('--post', action='store_true')
     arg('--temperature', type=float, default=1.0)
@@ -231,7 +231,9 @@ def main():
                                       num_workers=args.workers)
             all_senti_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            word_preds, token_preds = get_predicts(all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
+            all_start_preds = map_to_word(all_start_preds, valid_fold, args)
+            all_end_preds = map_to_word(all_end_preds, valid_fold, args)
+            word_preds = get_predicts(all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
             folds.loc[valid_fold.index, 'pred'] = word_preds
         folds[['sentiment','text','selected_text','pred']].to_csv(run_root / 'all_preds.csv', index=False, sep='\t')
 
@@ -305,6 +307,8 @@ def main():
                 load_model(model, run_root / ('best-model-%d.pt' % fold))
                 model.cuda()
                 _, fold_start_preds, fold_end_preds = predict(model, test, test_loader, args, progress=True, for_ensemble=True)
+                fold_start_preds = map_to_word(fold_start_preds, test, args)
+                fold_end_preds = map_to_word(fold_end_preds, test, args)
                 all_start_preds.append(fold_start_preds)
                 all_end_preds.append(fold_end_preds)
             all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, test)
@@ -438,6 +442,7 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_
             assert all_start_pred[-1].dim()==1
 
     all_senti_pred = np.concatenate(all_senti_pred)
+    
     if progress:
         tq.close()
     return all_senti_pred, all_start_pred, all_end_pred, all_inst_out
