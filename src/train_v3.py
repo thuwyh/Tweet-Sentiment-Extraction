@@ -23,19 +23,18 @@ from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoConf
 from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup)
 
-from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble,
+from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words,
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts, map_to_word)
 
 
 class TrainDataset(Dataset):
 
-    def __init__(self, data, vocab_path=None, do_lower=True, mode='train', aug=False, max_len=200):
+    def __init__(self, data, tokenizer, mode='train', aug=False):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
         self._sentiment = data['sentiment'].tolist()
         self._inst = data['in_st'].tolist()
-        # self._qid = data['qid'].tolist()
         self._data = data
         self._mode = mode
         if mode in ['train', 'valid']:
@@ -43,9 +42,7 @@ class TrainDataset(Dataset):
             self._end = data['end'].tolist()
         else:
             pass
-        self._max_len = max_len
-        self._tokenizer = RobertaTokenizer.from_pretrained(
-            vocab_path, cache_dir=None, do_lower_case=do_lower)
+        self._tokenizer = tokenizer
 
     def __len__(self):
         return len(self._tokens)
@@ -55,12 +52,12 @@ class TrainDataset(Dataset):
         
         inputs = self._tokenizer.encode_plus(
             sentiment, self._tokens[idx], return_tensors='pt')
-            # ,
-            # max_length=120, pad_to_max_length=True,
-            # truncation_strategy="only_second")
 
         token_id = inputs['input_ids'][0]
-        # type_id = inputs['token_type_ids'][0]
+        if 'token_type_ids' in inputs:
+            type_id = inputs['token_type_ids'][0]
+        else:
+            type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
         if self._mode == 'train':
             inst = [-100]*4+self._inst[idx]+[-100]
@@ -69,18 +66,25 @@ class TrainDataset(Dataset):
         else:
             start, end = 0, 0
             inst = [-100]*len(token_id)
-        return token_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst)
+        return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst)
 
+class MyCollator:
 
-def collate_fn(batch):
-    tokens, masks, label, start, end, inst = zip(*batch)
-    tokens = pad_sequence(tokens, batch_first=True, padding_value=1)
-    masks = pad_sequence(masks, batch_first=True, padding_value=0)
-    label = torch.LongTensor(label)
-    start = torch.LongTensor(start)
-    end = torch.LongTensor(end)
-    inst = pad_sequence(inst, batch_first=True, padding_value=-100)
-    return tokens, masks, label, start, end, inst
+    def __init__(self, token_pad_value=1, type_pad_value=0):
+        super().__init__()
+        self.token_pad_value = token_pad_value
+        self.type_pad_value = type_pad_value
+
+    def __call__(self, batch):
+        tokens, type_ids, masks, label, start, end, inst = zip(*batch)
+        tokens = pad_sequence(tokens, batch_first=True, padding_value=self.token_pad_value)
+        type_ids = pad_sequence(type_ids, batch_first=True, padding_value=self.type_pad_value)
+        masks = pad_sequence(masks, batch_first=True, padding_value=0)
+        label = torch.LongTensor(label)
+        start = torch.LongTensor(start)
+        end = torch.LongTensor(end)
+        inst = pad_sequence(inst, batch_first=True, padding_value=-100)
+        return tokens, type_ids, masks, label, start, end, inst
 
 
 class TweetModel(nn.Module):
@@ -157,6 +161,12 @@ def main():
     DATA_ROOT = Path('../input/')
     tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=True)
     args.tokenizer = tokenizer
+    if args.bert_path.find('roberta'):
+        collator = MyCollator()
+    else:
+        # this is for bert models
+        collator = MyCollator(token_pad_value=0, type_pad_value=1)
+
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
         folds = pd.read_pickle(DATA_ROOT / args.train_file)
         train_fold = folds[folds['fold'] != args.fold]
@@ -174,15 +184,13 @@ def main():
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
 
-        training_set = TrainDataset(
-            train_fold, vocab_path=args.vocab_path, do_lower=True)
-        training_loader = DataLoader(training_set, collate_fn=collate_fn,
+        training_set = TrainDataset(train_fold, tokenizer=tokenizer)
+        training_loader = DataLoader(training_set, collate_fn=collator,
                                      shuffle=True, batch_size=args.batch_size,
                                      num_workers=args.workers)
 
-        valid_set = TrainDataset(
-            valid_fold, vocab_path=args.vocab_path, mode='test')
-        valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
+        valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+        valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                   num_workers=args.workers)
 
         model = TweetModel(args.bert_path)
@@ -220,48 +228,45 @@ def main():
         valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
         config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
-        folds['pred'] = 0
         all_start_preds, all_end_preds = [], []
         for fold in range(5):
             load_model(model, run_root / ('best-model-%d.pt' % fold))
             model.cuda()
-            valid_set = TrainDataset(
-                valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
-            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
+            valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                       num_workers=args.workers)
             all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
             all_start_preds.append(fold_start_pred)
             all_end_preds.append(fold_end_pred)
         all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
-        metrics = evaluate(
-            all_senti_preds, all_start_preds, all_end_preds, valid_fold, args)
-    elif args.mode == 'validate5':
+        word_preds = get_predicts(all_start_preds, all_end_preds, valid_fold, args)
+        metrics = evaluate(word_preds, valid_fold, args)
+    
+    elif args.mode == 'validate52':
+        # 在答案层面融合
         valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
         config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
-        folds['pred'] = 0
-        all_start_preds, all_end_preds = [], []
+        all_word_preds = []
         for fold in range(5):
             load_model(model, run_root / ('best-model-%d.pt' % fold))
             model.cuda()
-            valid_set = TrainDataset(
-                valid_fold, vocab_path=args.vocab_path, mode='test', max_len=40)
-            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
+            valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                       num_workers=args.workers)
             all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            all_start_preds.append(fold_start_pred)
-            all_end_preds.append(fold_end_pred)
-        all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
-        metrics = evaluate(
-            all_senti_preds, all_start_preds, all_end_preds, valid_fold, args)
+            fold_word_preds = get_predicts(fold_start_pred, fold_end_pred, valid_fold, args)
+            all_word_preds.append(fold_word_preds)
+
+        word_preds = ensemble_words(all_word_preds)
+        metrics = evaluate(word_preds, valid_fold, args)
 
     elif args.mode == 'validate':
         valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
-        valid_set = TrainDataset(
-            valid_fold, vocab_path=args.vocab_path, mode='test')
-        valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
+        valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+        valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                   num_workers=args.workers)
         valid_result = valid_fold.copy()
         config = AutoConfig.from_pretrained(args.bert_path)
@@ -360,18 +365,15 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
         tq = tqdm.tqdm(total=epoch_length)
         losses = []
         mean_loss = 0
-        for i, (inputs, masks, targets, starts, ends, inst) in enumerate(train_loader):
+        for i, (tokens, types, masks, targets, starts, ends, inst) in enumerate(train_loader):
             lr = get_learning_rate(optimizer)
-            batch_size, length = inputs.size(0), inputs.size(1)
+            batch_size, length = tokens.size(0), tokens.size(1)
             masks = masks.cuda()
-            inputs, targets = inputs.cuda(), targets.cuda()
-            types = None
+            tokens, targets = tokens.cuda(), targets.cuda()
+            types = types.cuda()
             starts, ends, inst = starts.cuda(), ends.cuda(), inst.cuda()
 
-            # emb_layer = model.bert.get_input_embeddings()
-            # emb = emb_layer(inputs) , input_emb=emb
-            # if random.random() < 1.8:
-            senti_out, start_out, end_out, inst_out = model(inputs, masks, types)
+            senti_out, start_out, end_out, inst_out = model(tokens, masks, types)
             start_out = start_out.masked_fill(~masks.bool(), -10000.0)
             end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             # 正常loss
@@ -428,14 +430,14 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_
     if progress:
         tq = tqdm.tqdm(total=len(valid_df))
     with torch.no_grad():
-        for inputs, masks, _, _, _, _ in valid_loader:
+        for tokens, types, masks, _, _, _, _ in valid_loader:
             if progress:
-                batch_size = inputs.size(0)
+                batch_size = tokens.size(0)
                 tq.update(batch_size)
             masks = masks.cuda()
-            inputs = inputs.cuda()
-            types = None
-            senti_out, start_out, end_out, inst_out = model(inputs, masks, types)
+            tokens = tokens.cuda()
+            types = types.cuda()
+            senti_out, start_out, end_out, inst_out = model(tokens, masks, types)
             start_out = start_out.masked_fill(~masks.bool(), -1000)
             end_out= end_out.masked_fill(~masks.bool(), -1000)
             all_senti_pred.append(np.argmax(senti_out.cpu().numpy(), axis=-1))
@@ -458,8 +460,8 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
 
     all_senti_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
-    metrics = evaluate(all_senti_preds, all_start_preds,
-                          all_end_preds, all_inst_out, valid_df, args)
+    word_preds = get_predicts(all_start_preds, all_end_preds, valid_df, args)
+    metrics = evaluate(word_preds, valid_df, args)
     return metrics
 
 
