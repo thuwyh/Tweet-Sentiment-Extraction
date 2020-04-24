@@ -140,7 +140,7 @@ def ensemble_words(word_preds):
         for m_idx in range(model_num):
             temp+=list(set(word_preds[m_idx][idx].split()))
         word_count = collections.Counter(temp)
-        temp = [w for w in word_count.keys() if word_count[w]>model_num/2]
+        temp = [w for w in word_count.keys() if word_count[w]>=model_num*0.4]
         final_word_preds.append(' '.join(temp))
     return final_word_preds
 
