@@ -167,7 +167,7 @@ def main():
         },
         {
             'bert_path': '../../bert_models/roberta_base/',
-            'weight_path': '../experiments/test3_roberta/',
+            'weight_path': '../experiments/test3_roberta3/',
             'model_type': 'roberta',
             'test_file': '../input/localtest_roberta.pkl'
         }
@@ -211,10 +211,10 @@ def main():
     
     elif args.mode == 'validate52':
         # 在答案层面融合
-        
         all_word_preds = []
         for m in ensemble_models:
             valid_fold = pd.read_pickle(m['test_file'])
+            valid_fold.sort_values(by='textID', inplace=True)
             tokenizer = AutoTokenizer.from_pretrained(m['bert_path'], cache_dir=None, do_lower_case=True)
             args.tokenizer = tokenizer
             config = AutoConfig.from_pretrained(m['bert_path'])
@@ -237,6 +237,7 @@ def main():
                     model, valid_fold, valid_loader, args, progress=True)
                 fold_word_preds = get_predicts(fold_start_pred, fold_end_pred, valid_fold, args)
                 all_word_preds.append(fold_word_preds)
+                print(fold_word_preds[0:5])
 
         word_preds = ensemble_words(all_word_preds)
         metrics = evaluate(word_preds, valid_fold, args)
