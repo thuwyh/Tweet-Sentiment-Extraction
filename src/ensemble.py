@@ -228,7 +228,7 @@ def main():
                 args.offset = 3
         
             for fold in range(5):
-                load_model(model, m['weght_path'] + ('best-model-%d.pt' % fold))
+                load_model(model, m['weight_path'] + ('best-model-%d.pt' % fold))
                 model.cuda()
                 valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
                 valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
