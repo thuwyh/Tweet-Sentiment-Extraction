@@ -43,6 +43,7 @@ class TrainDataset(Dataset):
         else:
             pass
         self._tokenizer = tokenizer
+        self._offset = 4 if isinstance(tokenizer, RobertaTokenizer) else 3
 
     def __len__(self):
         return len(self._tokens)
@@ -60,9 +61,9 @@ class TrainDataset(Dataset):
             type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
         if self._mode == 'train':
-            inst = [-100]*4+self._inst[idx]+[-100]
-            start = self._start[idx]+4
-            end = self._end[idx]+4
+            inst = [-100]*self._offset+self._inst[idx]+[-100]
+            start = self._start[idx]+self._offset
+            end = self._end[idx]+self._offset
         else:
             start, end = 0, 0
             inst = [-100]*len(token_id)
