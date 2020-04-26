@@ -146,7 +146,6 @@ def ensemble_words(word_preds):
 
 def ensemble(senti_preds, start_preds, end_preds, df):
     # 在logit层面融合
-
     all_end_pred, all_start_pred = [], []
     tokens = df['tokens'].tolist()
     model_num = len(start_preds)
@@ -180,19 +179,16 @@ def get_best_pred(start_pred, end_pred):
         print(top_start[:30], top_end[:30])
         return 0, 0
     else:
-        return preds[0][0], preds[0][1]
+        return preds[0][0], preds[0][1], preds[0][2].item()
 
-def get_predicts(all_start_preds, all_end_preds, valid_df, args):
-    all_start_preds = map_to_word(all_start_preds, valid_df, args)
-    all_end_preds = map_to_word(all_end_preds, valid_df, args)
-
+def get_predicts_from_word_logits(all_start_preds, all_end_preds, valid_df, args):
     texts = valid_df['text'].tolist()
     all_senti_labels = valid_df['senti_label'].values
-    word_preds = []
+    word_preds, scores = [], []
     for idx in range(len(texts)):
         text = texts[idx]
         words = text.lower().split()
-        start_word, end_word = get_best_pred(all_start_preds[idx], all_end_preds[idx])
+        start_word, end_word, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
 
         first_word = words[start_word]
         if len(pattern.findall(first_word))>0:
@@ -204,8 +200,15 @@ def get_predicts(all_start_preds, all_end_preds, valid_df, args):
                 word_pred = ' '.join(words)
 
         word_preds.append(word_pred)
+        scores.append(score)
+    return word_preds, scores
 
-    return word_preds
+
+def get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_df, args):
+    all_start_preds = map_to_word(all_start_preds, valid_df, args)
+    all_end_preds = map_to_word(all_end_preds, valid_df, args)
+    word_preds, scores = get_predicts_from_word_logits(all_start_preds, all_end_preds, valid_df, args)
+    return word_preds, scores
 
 
 def get_loss(pred, label):
@@ -225,10 +228,6 @@ def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_pred
     texts = valid_df['text'].tolist()
     all_senti_labels = valid_df['senti_label'].values
     selected_texts = valid_df['selected_text'].tolist()
-    # print(all_senti_preds.shape)
-    # metrics['senti_acc'] = accuracy_score(all_senti_labels, all_senti_preds)
-    
-    # metrics['loss'] = (get_loss(all_start_preds, starts)+get_loss(all_end_preds, ends))/2
 
     clean_score_word, dirty_score_word = 0, 0
 
@@ -254,14 +253,9 @@ def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_pred
     metrics['clean_score_word'] = clean_score_word/len(texts)
     metrics['dirty_score_word'] = dirty_score_word/len(texts)
 
-    # metrics['clean_score_token'] = clean_score_token/len(texts)
-    # metrics['dirty_score_token'] = dirty_score_token/len(texts)
-
     print(
-        # 'loss', metrics['loss'],
           'clean word:', metrics['clean_score_word'], 
           'dirty word:', metrics['dirty_score_word'])
-    # print(confusion_matrix(all_senti_labels, all_senti_preds))
     return metrics
 
 

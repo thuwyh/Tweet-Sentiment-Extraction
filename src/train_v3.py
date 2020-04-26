@@ -24,7 +24,7 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup)
 
 from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words,
-                   load_model, save_model, set_seed, write_event, evaluate, get_predicts, map_to_word)
+                   load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
 
 
 class TrainDataset(Dataset):
@@ -174,6 +174,9 @@ def main():
         if args.no_neutral:
             train_fold = train_fold[train_fold['sentiment']!='neutral']
         valid_fold = folds[folds['fold'] == args.fold]
+        # remove pseudo samples
+        if 'type' in valid_fold.columns.tolist():
+            valid_fold = valid_fold[valid_fold['type']=='normal']
         print(valid_fold.shape)
         print('training fold:', args.fold)
         if args.limit:
@@ -241,7 +244,7 @@ def main():
             all_start_preds.append(fold_start_pred)
             all_end_preds.append(fold_end_pred)
         all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
-        word_preds = get_predicts(all_start_preds, all_end_preds, valid_fold, args)
+        word_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_fold, args)
         metrics = evaluate(word_preds, valid_fold, args)
     
     elif args.mode == 'validate52':
@@ -258,7 +261,7 @@ def main():
                                       num_workers=args.workers)
             all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            fold_word_preds = get_predicts(fold_start_pred, fold_end_pred, valid_fold, args)
+            fold_word_preds, scores = get_predicts_from_token_logits(fold_start_pred, fold_end_pred, valid_fold, args)
             all_word_preds.append(fold_word_preds)
 
         word_preds = ensemble_words(all_word_preds)
@@ -323,7 +326,7 @@ def main():
                 model = nn.DataParallel(model)
             all_senti_preds, all_start_preds, all_end_preds = predict(
                 model, test, test_loader, args, progress=True)
-            preds = get_predicts(all_senti_preds, all_start_preds, all_end_preds, test, args)
+            preds = get_predicts_from_token_logits(all_senti_preds, all_start_preds, all_end_preds, test, args)
         if args.mode == 'predict5':
             all_start_preds, all_end_preds = [], []
             for fold in range(5):
@@ -335,7 +338,7 @@ def main():
                 all_start_preds.append(fold_start_preds)
                 all_end_preds.append(fold_end_preds)
             all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, test)
-            preds = get_predicts(None, all_start_preds, all_end_preds, test, args)
+            preds = get_predicts_from_token_logits(None, all_start_preds, all_end_preds, test, args)
 
         test['selected_text'] = preds
         test[['textID','selected_text']].to_csv('submission.csv', index=False)
@@ -461,7 +464,7 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
 
     all_senti_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
-    word_preds = get_predicts(all_start_preds, all_end_preds, valid_df, args)
+    word_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_df, args)
     metrics = evaluate(word_preds, valid_df, args)
     return metrics
 

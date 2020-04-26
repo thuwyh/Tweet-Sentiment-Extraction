@@ -23,8 +23,7 @@ from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoConf
 from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup)
 
-from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words,
-                   load_model, save_model, set_seed, write_event, evaluate, get_predicts, map_to_word)
+from utilsv3 import binary_focal_loss, ensemble, ensemble_words, evaluate, get_best_pred, get_learning_rate, get_predicts_from_token_logits, get_predicts_from_word_logits, jaccard_list, load_model, map_to_word, save_model, set_seed, write_event
 
 
 class TrainDataset(Dataset):
@@ -159,12 +158,12 @@ def main():
     set_seed()
 
     ensemble_models = [
-        {
-            'bert_path': '../../bert_models/bert_base_uncased/',
-            'weight_path': '../experiments/test3_bert/',
-            'model_type': 'bert',
-            'test_file': '../input/localtest_bert.pkl'
-        },
+        # {
+        #     'bert_path': '../../bert_models/bert_base_uncased/',
+        #     'weight_path': '../experiments/test3_bert/',
+        #     'model_type': 'bert',
+        #     'test_file': '../input/localtest_bert.pkl'
+        # },
         {
             'bert_path': '../../bert_models/roberta_base/',
             'weight_path': '../experiments/test3_roberta3/',
@@ -191,23 +190,40 @@ def main():
             valid_fold = valid_fold[:args.limit]
 
     if args.mode == 'validate5':
-        valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
-        config = AutoConfig.from_pretrained(args.bert_path)
-        model = TweetModel(config=config)
         all_start_preds, all_end_preds = [], []
-        for fold in range(5):
-            load_model(model, run_root / ('best-model-%d.pt' % fold))
-            model.cuda()
-            valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
-            valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
-                                      num_workers=args.workers)
-            all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
-                model, valid_fold, valid_loader, args, progress=True)
-            all_start_preds.append(fold_start_pred)
-            all_end_preds.append(fold_end_pred)
+        for m in ensemble_models:
+            valid_fold = pd.read_pickle(m['test_file'])
+            valid_fold.sort_values(by='textID', inplace=True)
+            tokenizer = AutoTokenizer.from_pretrained(m['bert_path'], cache_dir=None, do_lower_case=True)
+            args.tokenizer = tokenizer
+            config = AutoConfig.from_pretrained(m['bert_path'])
+            model = TweetModel(config=config)
+            if m['model_type']=='roberta':
+                collator = MyCollator()
+                args.offset = 4
+            else:
+                # this is for bert models
+                collator = MyCollator(token_pad_value=0, type_pad_value=1)
+                args.offset = 3
+        
+            for fold in range(5):
+                load_model(model, m['weight_path'] + ('best-model-%d.pt' % fold))
+                model.cuda()
+                valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+                valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
+                                        num_workers=args.workers)
+                all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
+                    model, valid_fold, valid_loader, args, progress=True)
+                fold_start_pred = map_to_word(fold_start_pred, valid_fold, args)
+                fold_end_pred = map_to_word(fold_end_pred, valid_fold, args)
+                all_start_preds.append(fold_start_pred)
+                all_end_preds.append(fold_end_pred)
         all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
-        word_preds = get_predicts(all_start_preds, all_end_preds, valid_fold, args)
+        word_preds, scores = get_predicts_from_word_logits(all_start_preds, all_end_preds, valid_fold, args)
         metrics = evaluate(word_preds, valid_fold, args)
+        valid_fold['pred'] = word_preds
+        valid_fold['score'] = scores
+        valid_fold.to_pickle('../input/roberta_pred.pkl')
     
     elif args.mode == 'validate52':
         # 在答案层面融合
@@ -235,7 +251,7 @@ def main():
                                         num_workers=args.workers)
                 all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                     model, valid_fold, valid_loader, args, progress=True)
-                fold_word_preds = get_predicts(fold_start_pred, fold_end_pred, valid_fold, args)
+                fold_word_preds, scores = get_predicts_from_token_logits(fold_start_pred, fold_end_pred, valid_fold, args)
                 all_word_preds.append(fold_word_preds)
                 print(fold_word_preds[0:5])
 
@@ -282,7 +298,7 @@ def main():
                 model = nn.DataParallel(model)
             all_senti_preds, all_start_preds, all_end_preds = predict(
                 model, test, test_loader, args, progress=True)
-            preds = get_predicts(all_senti_preds, all_start_preds, all_end_preds, test, args)
+            preds = get_predicts_from_token_logits(all_senti_preds, all_start_preds, all_end_preds, test, args)
         if args.mode == 'predict5':
             all_start_preds, all_end_preds = [], []
             for fold in range(5):
@@ -294,14 +310,13 @@ def main():
                 all_start_preds.append(fold_start_preds)
                 all_end_preds.append(fold_end_preds)
             all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, test)
-            preds = get_predicts(None, all_start_preds, all_end_preds, test, args)
+            preds = get_predicts_from_token_logits(None, all_start_preds, all_end_preds, test, args)
 
         test['selected_text'] = preds
         test[['textID','selected_text']].to_csv('submission.csv', index=False)
 
 
 def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_ensemble=False) -> Dict[str, float]:
-    # run_root = Path('../experiments/' + args.run_root)
     model.eval()
     all_end_pred, all_senti_pred, all_start_pred, all_inst_out = [], [], [], []
     if progress:
@@ -337,7 +352,7 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
 
     all_senti_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
-    word_preds = get_predicts(all_start_preds, all_end_preds, valid_df, args)
+    word_preds = get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_df, args)
     metrics = evaluate(word_preds, valid_df, args)
     return metrics
 
