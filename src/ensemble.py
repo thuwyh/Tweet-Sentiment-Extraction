@@ -169,7 +169,13 @@ def main():
             'weight_path': '../experiments/test3_roberta3/',
             'model_type': 'roberta',
             'test_file': '../input/localtest_roberta.pkl'
-        }
+        },
+        # {
+        #     'bert_path': '../../bert_models/roberta_base/',
+        #     'weight_path': '../experiments/test3_roberta_pseudo/',
+        #     'model_type': 'roberta',
+        #     'test_file': '../input/localtest_roberta.pkl'
+        # }
     ]
 
     run_root = Path('../experiments/' + args.run_root)
