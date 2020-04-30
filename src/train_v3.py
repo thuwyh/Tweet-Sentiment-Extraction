@@ -130,7 +130,7 @@ def main():
     arg('--workers', type=int, default=2)
     arg('--lr', type=float, default=0.00002)
     arg('--clean', action='store_true')
-    arg('--n-epochs', type=int, default=4)
+    arg('--n-epochs', type=int, default=3)
     arg('--limit', type=int)
     arg('--fold', type=int, default=0)
     arg('--multi-gpu', type=int, default=0)
@@ -141,6 +141,7 @@ def main():
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
     arg('--no-neutral', action='store_true')
+    arg('--holdout', action='store_true')
 
     arg('--epsilon', type=float, default=0.3)
     arg('--max-len', type=int, default=200)
@@ -268,7 +269,8 @@ def main():
         metrics = evaluate(word_preds, valid_fold, args)
 
     elif args.mode == 'validate':
-        valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
+        if args.holdout:
+            valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
         valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                   num_workers=args.workers)
@@ -282,9 +284,12 @@ def main():
 
         all_senti_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
             model, valid_fold, valid_loader, args, progress=True)
-
-        metrics = evaluate(
-            all_senti_preds, all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
+        word_preds, inst_word_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
+        metrics = evaluate(word_preds, valid_fold, args)
+        metrics = evaluate(inst_word_preds, valid_fold, args)
+        valid_fold['pred'] = word_preds
+        valid_fold['inst_pred'] = inst_word_preds
+        valid_fold.to_csv(run_root/('pred-%d.csv'%args.fold), sep='\t', index=False)
 
     elif args.mode in ['predict', 'predict5']:
         test = pd.read_csv(DATA_ROOT / 'tweet-sentiment-extraction'/args.test_file)
@@ -464,7 +469,8 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
 
     all_senti_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
-    word_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_df, args)
+    word_preds, inst_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, all_inst_out, valid_df, args)
+    metrics = evaluate(inst_preds, valid_df, args)
     metrics = evaluate(word_preds, valid_df, args)
     return metrics
 

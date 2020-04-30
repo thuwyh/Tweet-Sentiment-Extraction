@@ -25,14 +25,17 @@ import re
 pattern = r"\w+[.]{1,5}\w+"
 pattern = re.compile(pattern)
 
-def map_to_word(preds, df, args):
+def map_to_word(preds, df, args, softmax=True):
     invert_maps = df['invert_map'].tolist()
     texts = df['text'].tolist()
     retval = []
     for idx in range(len(invert_maps)):
         words = texts[idx].split()
         temp = torch.zeros(len(words))
-        pred = torch.softmax(preds[idx], dim=-1)
+        if softmax:
+            pred = torch.softmax(preds[idx], dim=-1)
+        else:
+            pred = preds[idx]
         for p in range(len(invert_maps[idx])):
             temp[invert_maps[idx][p]]+=pred[p+args.offset]
         retval.append(temp)
@@ -181,15 +184,17 @@ def get_best_pred(start_pred, end_pred):
     else:
         return preds[0][0], preds[0][1], preds[0][2].item()
 
-def get_predicts_from_word_logits(all_start_preds, all_end_preds, valid_df, args):
+def get_predicts_from_word_logits(all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
     texts = valid_df['text'].tolist()
     all_senti_labels = valid_df['senti_label'].values
-    word_preds, scores = [], []
+    word_preds, inst_word_preds, scores = [], [], []
     for idx in range(len(texts)):
         text = texts[idx]
         words = text.lower().split()
         start_word, end_word, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
 
+        inst_pred = all_inst_preds[idx]
+        inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.8])
         first_word = words[start_word]
         if len(pattern.findall(first_word))>0:
             first_word = first_word.split('.')[-1]
@@ -198,17 +203,20 @@ def get_predicts_from_word_logits(all_start_preds, all_end_preds, valid_df, args
         if args.post:
             if all_senti_labels[idx]==1:
                 word_pred = ' '.join(words)
+                inst_word_pred = word_pred
 
         word_preds.append(word_pred)
+        inst_word_preds.append(inst_word_pred)
         scores.append(score)
-    return word_preds, scores
+    return word_preds, inst_word_preds, scores
 
 
-def get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_df, args):
+def get_predicts_from_token_logits(all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
     all_start_preds = map_to_word(all_start_preds, valid_df, args)
     all_end_preds = map_to_word(all_end_preds, valid_df, args)
-    word_preds, scores = get_predicts_from_word_logits(all_start_preds, all_end_preds, valid_df, args)
-    return word_preds, scores
+    all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
+    word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
+    return word_preds, inst_word_preds, scores
 
 
 def get_loss(pred, label):
