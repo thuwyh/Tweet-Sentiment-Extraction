@@ -34,6 +34,7 @@ class TrainDataset(Dataset):
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
         self._sentiment = data['sentiment'].tolist()
+        self._all_sentence = data['all_sentence'].tolist()
         self._inst = data['in_st'].tolist()
         self._data = data
         self._mode = mode
@@ -64,10 +65,12 @@ class TrainDataset(Dataset):
             inst = [-100]*self._offset+self._inst[idx]+[-100]
             start = self._start[idx]+self._offset
             end = self._end[idx]+self._offset
+            all_sentence = self._all_sentence[idx]
         else:
             start, end = 0, 0
             inst = [-100]*len(token_id)
-        return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst)
+            all_sentence = 0
+        return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst), all_sentence
 
 class MyCollator:
 
@@ -77,15 +80,16 @@ class MyCollator:
         self.type_pad_value = type_pad_value
 
     def __call__(self, batch):
-        tokens, type_ids, masks, label, start, end, inst = zip(*batch)
+        tokens, type_ids, masks, label, start, end, inst, all_sentence = zip(*batch)
         tokens = pad_sequence(tokens, batch_first=True, padding_value=self.token_pad_value)
         type_ids = pad_sequence(type_ids, batch_first=True, padding_value=self.type_pad_value)
         masks = pad_sequence(masks, batch_first=True, padding_value=0)
         label = torch.LongTensor(label)
         start = torch.LongTensor(start)
         end = torch.LongTensor(end)
+        all_sentence = torch.FloatTensor(all_sentence)
         inst = pad_sequence(inst, batch_first=True, padding_value=-100)
-        return tokens, type_ids, masks, label, start, end, inst
+        return tokens, type_ids, masks, label, start, end, inst, all_sentence
 
 
 class TweetModel(nn.Module):
@@ -99,7 +103,7 @@ class TweetModel(nn.Module):
                 pretrain_path, cache_dir=None)
         self.head = nn.Sequential(
             OrderedDict([
-                ('clf', nn.Linear(self.bert.config.hidden_size, 3))
+                ('clf', nn.Linear(self.bert.config.hidden_size, 1))
             ])
         )
         self.ext_head = nn.Sequential(
@@ -367,6 +371,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
 
     update_progress_steps = int(epoch_length / args.batch_size / 100)
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
+    bce_fn = nn.BCEWithLogitsLoss()
     # loss_fn = nn.NLLLoss()
 
     for epoch in range(start_epoch, start_epoch + n_epochs):
@@ -374,22 +379,24 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
         tq = tqdm.tqdm(total=epoch_length)
         losses = []
         mean_loss = 0
-        for i, (tokens, types, masks, targets, starts, ends, inst) in enumerate(train_loader):
+        for i, (tokens, types, masks, targets, starts, ends, inst, all_sentence) in enumerate(train_loader):
             lr = get_learning_rate(optimizer)
             batch_size, length = tokens.size(0), tokens.size(1)
             masks = masks.cuda()
             tokens, targets = tokens.cuda(), targets.cuda()
             types = types.cuda()
             starts, ends, inst = starts.cuda(), ends.cuda(), inst.cuda()
+            all_sentence = all_sentence.cuda()
 
-            senti_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
             start_out = start_out.masked_fill(~masks.bool(), -10000.0)
             end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             # 正常loss
+            whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
             start_loss = loss_fn(start_out, starts)
             end_loss = loss_fn(end_out, ends)
             inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
-            loss = (start_loss+end_loss)/2+inst_loss
+            loss = (start_loss+end_loss)/2+inst_loss+whole_loss
 
             loss /= args.step
 
@@ -435,21 +442,21 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
 def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_ensemble=False) -> Dict[str, float]:
     # run_root = Path('../experiments/' + args.run_root)
     model.eval()
-    all_end_pred, all_senti_pred, all_start_pred, all_inst_out = [], [], [], []
+    all_end_pred, all_whole_pred, all_start_pred, all_inst_out = [], [], [], []
     if progress:
         tq = tqdm.tqdm(total=len(valid_df))
     with torch.no_grad():
-        for tokens, types, masks, _, _, _, _ in valid_loader:
+        for tokens, types, masks, _, _, _, _, _ in valid_loader:
             if progress:
                 batch_size = tokens.size(0)
                 tq.update(batch_size)
             masks = masks.cuda()
             tokens = tokens.cuda()
             types = types.cuda()
-            senti_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
             start_out = start_out.masked_fill(~masks.bool(), -1000)
             end_out= end_out.masked_fill(~masks.bool(), -1000)
-            all_senti_pred.append(np.argmax(senti_out.cpu().numpy(), axis=-1))
+            all_whole_pred.append(torch.sigmoid(whole_out).cpu().numpy())
             inst_out = torch.softmax(inst_out, dim=-1)
             for idx in range(len(start_out)):
                 all_start_pred.append(start_out[idx,:].cpu())
@@ -457,19 +464,19 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False, for_
                 all_inst_out.append(inst_out[idx,:,1].cpu())
             assert all_start_pred[-1].dim()==1
 
-    all_senti_pred = np.concatenate(all_senti_pred)
+    all_whole_pred = np.concatenate(all_whole_pred)
     
     if progress:
         tq.close()
-    return all_senti_pred, all_start_pred, all_end_pred, all_inst_out
+    return all_whole_pred, all_start_pred, all_end_pred, all_inst_out
 
 
 def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False, progress=False):
     run_root = Path('../experiments/' + args.run_root)
 
-    all_senti_preds, all_start_preds, all_end_preds, all_inst_out = predict(
+    all_whole_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
-    word_preds, inst_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, all_inst_out, valid_df, args)
+    word_preds, inst_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_out, valid_df, args)
     metrics = evaluate(inst_preds, valid_df, args)
     metrics = evaluate(word_preds, valid_df, args)
     return metrics

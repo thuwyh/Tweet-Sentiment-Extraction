@@ -184,7 +184,7 @@ def get_best_pred(start_pred, end_pred):
     else:
         return preds[0][0], preds[0][1], preds[0][2].item()
 
-def get_predicts_from_word_logits(all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
+def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
     texts = valid_df['text'].tolist()
     all_senti_labels = valid_df['senti_label'].values
     word_preds, inst_word_preds, scores = [], [], []
@@ -200,6 +200,10 @@ def get_predicts_from_word_logits(all_start_preds, all_end_preds, all_inst_preds
             first_word = first_word.split('.')[-1]
         word_pred = first_word+' '+' '.join(words[start_word+1:end_word+1])
 
+        if all_whole_preds[idx]>0.5:
+            word_pred = ' '.join(words)
+            nst_word_pred = word_pred
+            
         if args.post:
             if all_senti_labels[idx]==1:
                 word_pred = ' '.join(words)
@@ -211,11 +215,11 @@ def get_predicts_from_word_logits(all_start_preds, all_end_preds, all_inst_preds
     return word_preds, inst_word_preds, scores
 
 
-def get_predicts_from_token_logits(all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
+def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
     all_start_preds = map_to_word(all_start_preds, valid_df, args)
     all_end_preds = map_to_word(all_end_preds, valid_df, args)
     all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
-    word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
+    word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
     return word_preds, inst_word_preds, scores
 
 
