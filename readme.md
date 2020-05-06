@@ -11,3 +11,14 @@
 
 ### 2020.04.28
 - 修改预处理代码
+
+### 2020.05.06
+- fp16不好
+- weight decay 不好
+- roberta large不好
+- 替换双引号不好
+- 原始loss: 5 fold avg 0.70946
+- 2倍loss：5 fold avg 0.70972
+
+### todo
+- 星号相关的探索

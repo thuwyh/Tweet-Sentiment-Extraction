@@ -244,12 +244,12 @@ def main():
             valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
             valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                       num_workers=args.workers)
-            all_senti_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
+            all_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
             all_start_preds.append(fold_start_pred)
             all_end_preds.append(fold_end_pred)
         all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, valid_fold)
-        word_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, valid_fold, args)
+        word_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, valid_fold, args)
         metrics = evaluate(word_preds, valid_fold, args)
     
     elif args.mode == 'validate52':
@@ -286,13 +286,13 @@ def main():
         if args.multi_gpu == 1:
             model = nn.DataParallel(model)
 
-        all_senti_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
+        all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
             model, valid_fold, valid_loader, args, progress=True)
-        word_preds, inst_word_preds, scores = get_predicts_from_token_logits(all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
+        word_preds, inst_word_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
         metrics = evaluate(word_preds, valid_fold, args)
         metrics = evaluate(inst_word_preds, valid_fold, args)
         valid_fold['pred'] = word_preds
-        valid_fold['inst_pred'] = inst_word_preds
+        # valid_fold['inst_pred'] = inst_word_preds
         valid_fold.to_csv(run_root/('pred-%d.csv'%args.fold), sep='\t', index=False)
 
     elif args.mode in ['predict', 'predict5']:
@@ -396,7 +396,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             start_loss = loss_fn(start_out, starts)
             end_loss = loss_fn(end_out, ends)
             inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
-            loss = (start_loss+end_loss)/2+inst_loss+whole_loss
+            loss = (start_loss+end_loss)+whole_loss+inst_loss
 
             loss /= args.step
 
@@ -477,7 +477,7 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
     all_whole_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
     word_preds, inst_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_out, valid_df, args)
-    metrics = evaluate(inst_preds, valid_df, args)
+    # metrics = evaluate(inst_preds, valid_df, args)
     metrics = evaluate(word_preds, valid_df, args)
     return metrics
 

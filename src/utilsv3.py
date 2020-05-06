@@ -202,7 +202,7 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
 
         if all_whole_preds[idx]>0.5:
             word_pred = ' '.join(words)
-            nst_word_pred = word_pred
+            inst_word_pred = word_pred
             
         if args.post:
             if all_senti_labels[idx]==1:
