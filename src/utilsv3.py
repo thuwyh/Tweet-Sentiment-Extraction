@@ -194,7 +194,7 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
         start_word, end_word, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
 
         inst_pred = all_inst_preds[idx]
-        inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.8])
+        inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.5])
         first_word = words[start_word]
         if len(pattern.findall(first_word))>0:
             first_word = first_word.split('.')[-1]
