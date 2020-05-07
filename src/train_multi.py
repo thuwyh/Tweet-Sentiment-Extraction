@@ -51,9 +51,24 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
-        
+        if self._mode == 'train':
+            if random.random()<0.0:
+                left, right = random.randint(0, self._start[idx]), random.randint(self._end[idx]+1, len(self._tokens[idx]))
+                tokens = self._tokens[idx][left: right]
+                start = self._start[idx]-left
+                end = self._end[idx]-left
+                whole_sentence = 1 if (self._end[idx]-self._start[idx])/(right-left)>0.9 else 0
+                in_st = self._inst[idx][left: right]
+            else:
+                tokens = self._tokens[idx]
+                start, end = self._start[idx], self._end[idx]
+                whole_sentence = self._all_sentence[idx]
+                in_st = self._inst[idx]
+        else:
+            tokens = self._tokens[idx]
+
         inputs = self._tokenizer.encode_plus(
-            sentiment, self._tokens[idx], return_tensors='pt')
+            sentiment, tokens, return_tensors='pt')
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:
@@ -62,10 +77,10 @@ class TrainDataset(Dataset):
             type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
         if self._mode == 'train':
-            inst = [0]*self._offset+self._inst[idx]+[0]
-            start = self._start[idx]+self._offset
-            end = self._end[idx]+self._offset
-            all_sentence = self._all_sentence[idx]
+            inst = [0]*self._offset+in_st+[0]
+            start = start+self._offset
+            end = end+self._offset
+            all_sentence = whole_sentence
         else:
             start, end = 0, 0
             inst = [0]*len(token_id)
@@ -134,7 +149,7 @@ def main():
     arg('--workers', type=int, default=2)
     arg('--lr', type=float, default=0.00002)
     arg('--clean', action='store_true')
-    arg('--n-epochs', type=int, default=3)
+    arg('--n-epochs', type=int, default=4)
     arg('--limit', type=int)
     arg('--fold', type=int, default=0)
     arg('--multi-gpu', type=int, default=0)
