@@ -52,7 +52,7 @@ class TrainDataset(Dataset):
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
         if self._mode == 'train':
-            if random.random()<0.0:
+            if random.random()<-0.1:
                 left, right = random.randint(0, self._start[idx]), random.randint(self._end[idx]+1, len(self._tokens[idx]))
                 tokens = self._tokens[idx][left: right]
                 start = self._start[idx]-left
@@ -149,7 +149,7 @@ def main():
     arg('--workers', type=int, default=2)
     arg('--lr', type=float, default=0.00002)
     arg('--clean', action='store_true')
-    arg('--n-epochs', type=int, default=4)
+    arg('--n-epochs', type=int, default=3)
     arg('--limit', type=int)
     arg('--fold', type=int, default=0)
     arg('--multi-gpu', type=int, default=0)
