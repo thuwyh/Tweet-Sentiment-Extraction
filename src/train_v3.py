@@ -407,7 +407,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             start_loss = loss_fn(start_out, starts)
             end_loss = loss_fn(end_out, ends)
             inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
-            loss = (start_loss+end_loss)+whole_loss+inst_loss
+            loss = (start_loss+end_loss)+inst_loss+whole_loss
 
             loss /= args.step
 

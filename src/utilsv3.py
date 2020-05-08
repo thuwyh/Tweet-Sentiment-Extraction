@@ -34,10 +34,13 @@ def map_to_word(preds, df, args, softmax=True):
         temp = torch.zeros(len(words))
         if softmax:
             pred = torch.softmax(preds[idx], dim=-1)
+            for p in range(len(invert_maps[idx])):
+                temp[invert_maps[idx][p]]+= pred[p+args.offset]
         else:
             pred = preds[idx]
-        for p in range(len(invert_maps[idx])):
-            temp[invert_maps[idx][p]]+= pred[p+args.offset]
+            for p in range(len(invert_maps[idx])):
+                # temp[invert_maps[idx][p]]+= pred[p+args.offset]
+                temp[invert_maps[idx][p]] = max(temp[invert_maps[idx][p]], pred[p+args.offset])
         retval.append(temp)
     return retval
 
@@ -194,15 +197,16 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
         start_word, end_word, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
 
         inst_pred = all_inst_preds[idx]
-        inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.9])
+        inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.95])
         first_word = words[start_word]
         if len(pattern.findall(first_word))>0:
-            first_word = first_word.split('.')[-1]
+            actual_words = [w for w in first_word.split('.') if len(w)>0 ]
+            first_word = actual_words[-1]#+' .'+actual_words[-1]
         word_pred = first_word+' '+' '.join(words[start_word+1:end_word+1]) #+' '+inst_word_pred
 
-        if all_whole_preds[idx]>0.5:
-            word_pred = ' '.join(words)
-            inst_word_pred = word_pred
+        # if all_whole_preds[idx]>0.5:
+        #     word_pred = ' '.join(words)
+        #     inst_word_pred = word_pred
             
         if args.post:
             if all_senti_labels[idx]==1:
