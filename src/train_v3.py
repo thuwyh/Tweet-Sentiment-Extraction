@@ -106,6 +106,16 @@ class TweetModel(nn.Module):
                 ('clf', nn.Linear(self.bert.config.hidden_size, 1))
             ])
         )
+        self.cnn = nn.Sequential(
+            OrderedDict([
+                ('drop1', nn.Dropout(0.1)),
+                ('cnn', nn.Conv1d(self.bert.config.hidden_size, self.bert.config.hidden_size, 3, padding=1)),
+                ('act', nn.GELU()),
+                # ('drop2', nn.Dropout(0.1)),
+                # ('cnn2', nn.Conv1d(self.bert.config.hidden_size, self.bert.config.hidden_size, 3, padding=1)),
+                # ('act2', nn.ReLU())
+            ])
+        )
         self.ext_head = nn.Sequential(
             OrderedDict([
                 ('se', nn.Linear(self.bert.config.hidden_size, 2))
@@ -117,7 +127,8 @@ class TweetModel(nn.Module):
     def forward(self, inputs, masks, token_type_ids=None, input_emb=None):
         seq_output, pooled_output = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
-        out = self.head(pooled_output)
+        out = self.head(self.dropout(pooled_output))
+        seq_output = self.cnn(seq_output.permute(0,2,1)).permute(0,2,1)
         se_out = self.ext_head(self.dropout(seq_output))  #()
         inst_out = self.inst_head(self.dropout(seq_output))
         return out, se_out[:, :, 0], se_out[:, :, 1], inst_out
@@ -477,7 +488,7 @@ def validation(model: nn.Module, valid_df, valid_loader, args, save_result=False
     all_whole_preds, all_start_preds, all_end_preds, all_inst_out = predict(
         model, valid_df, valid_loader, args)
     word_preds, inst_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_out, valid_df, args)
-    # metrics = evaluate(inst_preds, valid_df, args)
+    metrics = evaluate(inst_preds, valid_df, args)
     metrics = evaluate(word_preds, valid_df, args)
     return metrics
 
