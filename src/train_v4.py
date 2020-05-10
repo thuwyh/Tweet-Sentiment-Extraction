@@ -28,6 +28,27 @@ from utilsv3 import (binary_focal_loss, get_learning_rate, jaccard_list, get_bes
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
 
 
+class FGM():
+    def __init__(self, model):
+        self.model = model
+        self.backup = {}
+
+    def attack(self, epsilon=1., emb_name='word_embeddings'):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and emb_name in name:
+                self.backup[name] = param.data.clone()
+                norm = torch.norm(param.grad)
+                if norm != 0:
+                    r_at = epsilon * param.grad / norm
+                    param.data.add_(r_at)
+
+    def restore(self, emb_name='word_embeddings'):
+        for name, param in self.model.named_parameters():
+            if param.requires_grad and emb_name in name:
+                assert name in self.backup
+                param.data = self.backup[name]
+            self.backup = {}
+            
 class TrainDataset(Dataset):
 
     def __init__(self, data, tokenizer, mode='train', aug=False):
@@ -67,12 +88,6 @@ class TrainDataset(Dataset):
             start = self._start[idx]+self._offset
             end = self._end[idx]+self._offset
             all_sentence = self._all_sentence[idx]
-            # for p in range(len(mask)):
-            #     r = random.random()
-            #     if r<0.05:
-                    # mask[p]=0
-            # elif 0.1<r<0.2:
-                    # token_id[p]=3
         else:
             start, end = 0, 0
             inst = [-100]*len(token_id)
@@ -127,8 +142,8 @@ class TweetModel(nn.Module):
         )
         self.inst_head = nn.Linear(self.bert.config.hidden_size, 2)
         self.dropout = nn.Dropout(0.1)
-        for name, param in self.bert.embeddings.named_parameters():
-            param.requires_grad = False
+        # for name, param in self.bert.embeddings.named_parameters():
+        #     param.requires_grad = False
         # for l in range(3):
         #     for param in self.bert.encoder.layer[l].parameters():
         #         param.requires_grad = False
@@ -137,12 +152,6 @@ class TweetModel(nn.Module):
         seq_output, pooled_output = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
 
-        # masks[:,1]=0
-        # seq_output1, pooled_output1 = self.bert(
-        #     inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
-
-        # seq_output = seq_output+seq_output1
-        # pooled_output= pooled_output+pooled_output1
         out = self.head(self.dropout(pooled_output))
         seq_output = self.cnn(seq_output.permute(0,2,1)).permute(0,2,1)
         se_out = self.ext_head(self.dropout(seq_output))  #()
@@ -156,7 +165,7 @@ def main():
     arg('mode', choices=['train', 'validate', 'predict', 'predict5',
                          'validate5', 'validate52'])
     arg('run_root')
-    arg('--batch-size', type=int, default=16)
+    arg('--batch-size', type=int, default=32)
     arg('--step', type=int, default=1)
     arg('--workers', type=int, default=2)
     arg('--lr', type=float, default=0.00002)
@@ -400,7 +409,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
     bce_fn = nn.BCEWithLogitsLoss()
     # loss_fn = nn.NLLLoss()
-
+    fgm = FGM(model)
     for epoch in range(start_epoch, start_epoch + n_epochs):
         model.train()
         tq = tqdm.tqdm(total=epoch_length)
@@ -433,6 +442,21 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             else:
                 loss.backward()
 
+            fgm.attack() 
+            whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
+            start_loss = loss_fn(start_out, starts)
+            end_loss = loss_fn(end_out, ends)
+            inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
+            loss = (start_loss+end_loss)+inst_loss+whole_loss
+
+            if args.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
+                
+            fgm.restore()
             if i%args.step==0:
                 if args.max_grad_norm > 0:
                     if args.fp16:

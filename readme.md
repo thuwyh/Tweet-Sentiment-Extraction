@@ -25,8 +25,19 @@
 - 加入了多个可能区间的训练
 - 两重improve+cnn：0.71034
 - 两重improve，没有cnn：0.70946
-- 一重improve+cnn：0.71072
+- 一重improve+cnn：0.71074，完整5折：0.71135
 - 没有space的improve+cnn：0.70964
+
+### 2020.05.10
+- mask掉sentiment增强没用
+- 堆叠两个bert也没用
+- 两层卷积也没用
+- freeze embedding，完整5折,3 epoch: 0.71256; 4epoch变差明显
+- freeze embedding+3 layers: failed
+- cosine schedule: failed
+- cosine with restart: 0.71235
+- fgm: 0.713528
+- freeze embedding+fgm: worse than above
 
 ### todo
 - [x] 星号相关的探索

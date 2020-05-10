@@ -204,9 +204,9 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
             first_word = actual_words[-1]#+' .'+actual_words[-1]
         word_pred = first_word+' '+' '.join(words[start_word+1:end_word+1]) #+' '+inst_word_pred
 
-        # if all_whole_preds[idx]>0.5:
-        #     word_pred = ' '.join(words)
-        #     inst_word_pred = word_pred
+        if all_whole_preds[idx]>0.5:
+            word_pred = ' '.join(words)
+            inst_word_pred = word_pred
             
         if args.post:
             if all_senti_labels[idx]==1:
