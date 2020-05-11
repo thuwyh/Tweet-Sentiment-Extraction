@@ -42,3 +42,15 @@
 ### todo
 - [x] 星号相关的探索
 - 多区间训练及数据增强
+
+
+### finetune
+python lm_finetune.py --train_data_file ../input/corpus.txt \
+--output_dir ../../bert_models/finetuned_roberta/ \
+--model_type roberta \
+--line_by_line \
+--model_name_or_path ../../bert_models/roberta_base/ \
+--mlm \
+--do_train \
+--per_gpu_train_batch_size 16 \
+--num_train_epochs 2
