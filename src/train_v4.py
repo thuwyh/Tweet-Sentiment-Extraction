@@ -51,7 +51,7 @@ class FGM():
             
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', aug=False):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.1):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
@@ -60,6 +60,8 @@ class TrainDataset(Dataset):
         self._inst = data['in_st'].tolist()
         self._data = data
         self._mode = mode
+        self._smooth = smooth
+        self._epsilon = epsilon
         if mode in ['train', 'valid']:
             self._start = data['start'].tolist()
             self._end = data['end'].tolist()
@@ -87,6 +89,13 @@ class TrainDataset(Dataset):
             inst = [-100]*self._offset+self._inst[idx]+[-100]
             start = self._start[idx]+self._offset
             end = self._end[idx]+self._offset
+            if self._smooth:
+                start_idx, end_idx = start, end
+                start, end = torch.zeros_like(token_id).float(), torch.zeros_like(token_id).float()
+                start[start_idx] = 1-self._epsilon
+                end[end_idx] = 1-self._epsilon
+                start+=self._epsilon/len(mask)
+                end+=self._epsilon/len(mask)
             all_sentence = self._all_sentence[idx]
         else:
             start, end = 0, 0
@@ -107,8 +116,12 @@ class MyCollator:
         type_ids = pad_sequence(type_ids, batch_first=True, padding_value=self.type_pad_value)
         masks = pad_sequence(masks, batch_first=True, padding_value=0)
         label = torch.LongTensor(label)
-        start = torch.LongTensor(start)
-        end = torch.LongTensor(end)
+        if not isinstance(start[0], int):
+            start = pad_sequence(start, batch_first=True, padding_value=0)
+            end = pad_sequence(end, batch_first=True, padding_value=0)
+        else:
+            start = torch.LongTensor(start)
+            end = torch.LongTensor(end)
         all_sentence = torch.FloatTensor(all_sentence)
         inst = pad_sequence(inst, batch_first=True, padding_value=-100)
         return tokens, type_ids, masks, label, start, end, inst, all_sentence
@@ -193,6 +206,7 @@ def main():
     arg('--offset', type=int, default=4)
     arg('--best-loss', action='store_true')
     arg('--post', action='store_true')
+    arg('--smooth', action='store_true')
     arg('--temperature', type=float, default=1.0)
 
     args = parser.parse_args()
@@ -229,7 +243,7 @@ def main():
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
 
-        training_set = TrainDataset(train_fold, tokenizer=tokenizer)
+        training_set = TrainDataset(train_fold, tokenizer=tokenizer, smooth=args.smooth)
         training_loader = DataLoader(training_set, collate_fn=collator,
                                      shuffle=True, batch_size=args.batch_size,
                                      num_workers=args.workers)
@@ -406,6 +420,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
                             args.fold).open('at', encoding='utf8')
 
     update_progress_steps = int(epoch_length / args.batch_size / 100)
+    kl_fn = nn.KLDivLoss()
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
     bce_fn = nn.BCEWithLogitsLoss()
     # loss_fn = nn.NLLLoss()
@@ -429,8 +444,13 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             # 正常loss
             whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
-            start_loss = loss_fn(start_out, starts)
-            end_loss = loss_fn(end_out, ends)
+            if args.smooth:
+                start_out = torch.log_softmax(start_out, dim=-1)
+                end_out = torch.log_softmax(end_out, dim=-1)
+                start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
+            else:
+                start_loss = loss_fn(start_out, starts)
+                end_loss = loss_fn(end_out, ends)
             inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
             loss = (start_loss+end_loss)+inst_loss+whole_loss
 
@@ -445,8 +465,13 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             fgm.attack() 
             whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
             whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
-            start_loss = loss_fn(start_out, starts)
-            end_loss = loss_fn(end_out, ends)
+            if args.smooth:
+                start_out = torch.log_softmax(start_out, dim=-1)
+                end_out = torch.log_softmax(end_out, dim=-1)
+                start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
+            else:
+                start_loss = loss_fn(start_out, starts)
+                end_loss = loss_fn(end_out, ends)
             inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
             loss = (start_loss+end_loss)+inst_loss+whole_loss
 

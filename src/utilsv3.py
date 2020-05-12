@@ -220,8 +220,8 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
 
 
 def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
-    all_start_preds = map_to_word(all_start_preds, valid_df, args)
-    all_end_preds = map_to_word(all_end_preds, valid_df, args)
+    all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=False)
+    all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=False)
     all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
     word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
     return word_preds, inst_word_preds, scores
