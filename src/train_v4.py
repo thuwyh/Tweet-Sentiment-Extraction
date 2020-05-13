@@ -51,7 +51,7 @@ class FGM():
             
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.1):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
@@ -420,7 +420,7 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
                             args.fold).open('at', encoding='utf8')
 
     update_progress_steps = int(epoch_length / args.batch_size / 100)
-    kl_fn = nn.KLDivLoss()
+    kl_fn = nn.KLDivLoss(reduction='batchmean')
     loss_fn = nn.CrossEntropyLoss(ignore_index=-100)
     bce_fn = nn.BCEWithLogitsLoss()
     # loss_fn = nn.NLLLoss()
