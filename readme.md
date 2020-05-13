@@ -39,6 +39,15 @@
 - fgm: 0.713528
 - freeze embedding+fgm: worse than above
 
+### 2020.05.12(office)
+- 只用训练集finetune lm, 0.71211
+- 增加测试集finetune lm，0.71296
+- label smoothing 暂时失败
+
+### 2020.05.13(office)
+- 修改前处理和后处理, 0.7149
+- 修改前处理和后处理+finetune LM，
+
 ### todo
 - [x] 星号相关的探索
 - 多区间训练及数据增强
@@ -53,4 +62,16 @@ python lm_finetune.py --train_data_file ../input/corpus.txt \
 --mlm \
 --do_train \
 --per_gpu_train_batch_size 16 \
---num_train_epochs 2
+--num_train_epochs 2 \
+--save_total_limit 1
+
+python lm_finetune.py --train_data_file ../input/corpus_aug.txt \
+--output_dir ../../bert_models/finetuned_roberta_aug/ \
+--model_type roberta \
+--line_by_line \
+--model_name_or_path ../../bert_models/roberta_base/ \
+--mlm \
+--do_train \
+--per_gpu_train_batch_size 16 \
+--num_train_epochs 2 \
+--save_total_limit 1
