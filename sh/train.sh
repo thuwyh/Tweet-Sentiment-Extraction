@@ -14,11 +14,11 @@ cd ../src
 # python train_v4.py train test_roberta5 --batch-size 16 --train-file train_roberta2.pkl --fold 4 --bert-path ../../bert_models/finetuned_roberta/ --post #--weight_decay 0.01
 
 # aug data
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post --smooth #--clean #--weight_decay 0.01 #
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--clean #--weight_decay 0.01 #
+python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta3.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
 
 
 # python train_v3.py train test3_roberta3 --batch-size 16 --train-file train_roberta2.pkl --fold 0 --bert-path ../../bert_models/finetuned_roberta/ --post --clean #--no-neutral #--clean #--weight_decay 0.01 #

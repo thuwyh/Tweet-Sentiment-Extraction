@@ -51,7 +51,7 @@ class FGM():
             
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.1):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
@@ -73,11 +73,27 @@ class TrainDataset(Dataset):
     def __len__(self):
         return len(self._tokens)
 
+    def get_other_sample(self, idx, sentiment):
+        while True:
+            idx = random.randint(0,len(self._tokens)-1)
+            if self._sentiment[idx]!=sentiment:
+                return self._tokens[idx]
+
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
-        
+        tokens = self._tokens[idx]
+        inst = self._inst[idx]
+        whole_sentence = self._all_sentence[idx]
+
+        if self._mode=='train':
+            if sentiment!='neutral' and random.random()<0.05:
+                aug_tokens = self.get_other_sample(idx, sentiment)
+                tokens = tokens+aug_tokens
+                inst = inst+[0 for i in range(len(aug_tokens))]
+                whole_sentence = 0
+
         inputs = self._tokenizer.encode_plus(
-            sentiment, self._tokens[idx], return_tensors='pt')
+            sentiment, tokens, return_tensors='pt')
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:
@@ -85,18 +101,23 @@ class TrainDataset(Dataset):
         else:
             type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
+
         if self._mode == 'train':
-            inst = [-100]*self._offset+self._inst[idx]+[-100]
+            inst = [-100]*self._offset+inst+[-100]
             start = self._start[idx]+self._offset
             end = self._end[idx]+self._offset
+
             if self._smooth:
                 start_idx, end_idx = start, end
-                start, end = torch.zeros_like(token_id).float(), torch.zeros_like(token_id).float()
-                start[start_idx] = 1-self._epsilon
-                end[end_idx] = 1-self._epsilon
-                start+=self._epsilon/len(mask)
-                end+=self._epsilon/len(mask)
-            all_sentence = self._all_sentence[idx]
+                start, end = torch.rand_like(token_id, dtype=torch.float), torch.rand_like(token_id, dtype=torch.float)
+                start = start*self._epsilon/torch.sum(start)
+                end = end*self._epsilon/torch.sum(end)
+                start[start_idx] += 1-self._epsilon
+                end[end_idx] += 1-self._epsilon
+
+                # start+=self._epsilon/len(mask)
+                # end+=self._epsilon/len(mask)
+            all_sentence = whole_sentence
         else:
             start, end = 0, 0
             inst = [-100]*len(token_id)
