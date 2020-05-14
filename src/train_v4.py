@@ -51,7 +51,7 @@ class FGM():
             
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.1):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
@@ -85,12 +85,12 @@ class TrainDataset(Dataset):
         inst = self._inst[idx]
         whole_sentence = self._all_sentence[idx]
 
-        if self._mode=='train':
-            if sentiment!='neutral' and random.random()<0.05:
-                aug_tokens = self.get_other_sample(idx, sentiment)
-                tokens = tokens+aug_tokens
-                inst = inst+[0 for i in range(len(aug_tokens))]
-                whole_sentence = 0
+        # if self._mode=='train':
+        #     if sentiment!='neutral' and random.random()<-0.05:
+        #         aug_tokens = self.get_other_sample(idx, sentiment)
+        #         tokens = tokens+aug_tokens
+        #         inst = inst+[-100 for i in range(len(aug_tokens))]
+        #         whole_sentence = 0
 
         inputs = self._tokenizer.encode_plus(
             sentiment, tokens, return_tensors='pt')
@@ -109,12 +109,20 @@ class TrainDataset(Dataset):
 
             if self._smooth:
                 start_idx, end_idx = start, end
-                start, end = torch.rand_like(token_id, dtype=torch.float), torch.rand_like(token_id, dtype=torch.float)
-                start = start*self._epsilon/torch.sum(start)
-                end = end*self._epsilon/torch.sum(end)
+                start, end = torch.zeros_like(token_id, dtype=torch.float), torch.zeros_like(token_id, dtype=torch.float)
+                # start = start*self._epsilon/torch.sum(start)
+                # end = end*self._epsilon/torch.sum(end)
                 start[start_idx] += 1-self._epsilon
                 end[end_idx] += 1-self._epsilon
 
+                if start_idx>0:
+                    start[start_idx-1]= self._epsilon/2
+                if start_idx<len(start)-1:
+                    start[start_idx+1] = self._epsilon/2
+                if end_idx>0:
+                    end[end_idx-1] = self._epsilon/2
+                if end_idx<len(end)-1:
+                    end[end_idx+1] = self._epsilon/2
                 # start+=self._epsilon/len(mask)
                 # end+=self._epsilon/len(mask)
             all_sentence = whole_sentence
@@ -199,7 +207,7 @@ def main():
     arg('mode', choices=['train', 'validate', 'predict', 'predict5',
                          'validate5', 'validate52'])
     arg('run_root')
-    arg('--batch-size', type=int, default=32)
+    arg('--batch-size', type=int, default=16)
     arg('--step', type=int, default=1)
     arg('--workers', type=int, default=2)
     arg('--lr', type=float, default=0.00002)
@@ -226,6 +234,7 @@ def main():
     arg('--adam-epsilon', type=float, default=1e-6)
     arg('--offset', type=int, default=4)
     arg('--best-loss', action='store_true')
+    arg('--abandon', action='store_true')
     arg('--post', action='store_true')
     arg('--smooth', action='store_true')
     arg('--temperature', type=float, default=1.0)
@@ -247,6 +256,8 @@ def main():
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
         folds = pd.read_pickle(DATA_ROOT / args.train_file)
         train_fold = folds[folds['fold'] != args.fold]
+        if args.abandon:
+            train_fold = train_fold[train_fold['label_jaccard']>0.6]
         if args.no_neutral:
             train_fold = train_fold[train_fold['sentiment']!='neutral']
         valid_fold = folds[folds['fold'] == args.fold]
@@ -485,6 +496,8 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
 
             fgm.attack() 
             whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
+            # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
             if args.smooth:
                 start_out = torch.log_softmax(start_out, dim=-1)
