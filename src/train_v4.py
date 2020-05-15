@@ -24,7 +24,7 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup,
                                        get_cosine_with_hard_restarts_schedule_with_warmup)
 
-from utilsv4 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words,
+from utilsv4 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words, prepare,
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
 
 
@@ -55,9 +55,7 @@ class TrainDataset(Dataset):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
-        self._sentiment = data['sentiment'].tolist()
-        self._all_sentence = data['all_sentence'].tolist()
-        self._inst = data['in_st'].tolist()
+        self._sentiment = data['sentiment'].tolist()            
         self._data = data
         self._mode = mode
         self._smooth = smooth
@@ -65,6 +63,8 @@ class TrainDataset(Dataset):
         if mode in ['train', 'valid']:
             self._start = data['start'].tolist()
             self._end = data['end'].tolist()
+            self._all_sentence = data['all_sentence'].tolist()
+            self._inst = data['in_st'].tolist()
         else:
             pass
         self._tokenizer = tokenizer
@@ -82,8 +82,9 @@ class TrainDataset(Dataset):
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
         tokens = self._tokens[idx]
-        inst = self._inst[idx]
-        whole_sentence = self._all_sentence[idx]
+        if self._mode=='train':
+            inst = self._inst[idx]
+            whole_sentence = self._all_sentence[idx]
 
         # if self._mode=='train':
         #     if sentiment!='neutral' and random.random()<-0.05:
@@ -240,8 +241,8 @@ def main():
     arg('--temperature', type=float, default=1.0)
 
     args = parser.parse_args()
-    args.vocab_path = args.bert_path# + 'vocab.txt'
-    set_seed()
+    args.vocab_path = args.bert_path
+    set_seed(42)
 
     run_root = Path('../experiments/' + args.run_root)
     DATA_ROOT = Path('../input/')
@@ -252,9 +253,9 @@ def main():
     else:
         # this is for bert models
         collator = MyCollator(token_pad_value=0, type_pad_value=1)
-
+    folds = pd.read_pickle(DATA_ROOT / args.train_file)
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
-        folds = pd.read_pickle(DATA_ROOT / args.train_file)
+        # folds = pd.read_pickle(DATA_ROOT / args.train_file)
         train_fold = folds[folds['fold'] != args.fold]
         if args.abandon:
             train_fold = train_fold[train_fold['label_jaccard']>0.6]
@@ -379,22 +380,35 @@ def main():
 
     elif args.mode in ['predict', 'predict5']:
         test = pd.read_csv(DATA_ROOT / 'tweet-sentiment-extraction'/args.test_file)
+        test.dropna(subset=['text','selected_text'], inplace=True)
+        test['text'] = test['text'].apply(lambda x: ' '.join(x.lower().strip().split()))
+        test['fold'] = folds['fold'].values
+        test = test[test['fold']==args.fold]
         if args.limit:
             test = test.iloc[:args.limit]
+        
         data = []
         for text in test['text'].tolist():
-            split_text = text.split()
-            tokens, invert_map, first_token = [], [], []
-            for idx, w in enumerate(split_text):
-                for idx2, token in enumerate(tokenizer.tokenize(' '+w)):
+            tokens, invert_map = [], []
+
+            words, first_char, _ = prepare(text)
+
+            for idx, w in enumerate(words):
+                w = w.replace("`","'")
+                if first_char[idx]:
+                    prefix = " "
+                else:
+                    prefix = ""
+                for token in tokenizer.tokenize(prefix+w):
                     tokens.append(token)
                     invert_map.append(idx)
-                    first_token.append(True if idx2==0 else False)
-            data.append((tokens, invert_map, first_token))
-        tokens, invert_map, first_token = zip(*data)
+
+            data.append((words, first_char, tokens, invert_map))
+        words, first_char, tokens, invert_map = zip(*data)
+        test['words'] = words
         test['tokens'] = tokens
         test['invert_map'] = invert_map
-        test['first_token'] = first_token
+        test['first_char'] = first_char
         senti2label = {
             'positive':2,
             'negative':0,
@@ -402,36 +416,48 @@ def main():
         }
         test['senti_label']=test['sentiment'].apply(lambda x: senti2label[x])
 
-        test_set = TrainDataset(test, vocab_path=args.vocab_path, mode='test', max_len=args.max_len)
-        test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, collate_fn=collate_fn,
+        test_set = TrainDataset(test, tokenizer=tokenizer, mode='test')
+        test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                  num_workers=args.workers)
         config = AutoConfig.from_pretrained(args.bert_path)
         model = TweetModel(config=config)
         
         if args.mode == 'predict':
             load_model(model, run_root / ('best-model-%d.pt' % args.fold))
-
+            class Args:
+                post = True
+                tokenizer = RobertaTokenizer.from_pretrained(args.bert_path)
+                offset = 4
+                batch_size = 16
+                workers = 1
+                bert_path = args.bert_path
+            args = Args()
             model.cuda()
-            model = amp.initialize(model, None, opt_level="O2", verbosity=0)
-            if args.multi_gpu == 1:
-                model = nn.DataParallel(model)
-            all_senti_preds, all_start_preds, all_end_preds = predict(
+
+            all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = predict(
                 model, test, test_loader, args, progress=True)
-            preds = get_predicts_from_token_logits(all_senti_preds, all_start_preds, all_end_preds, test, args)
+            word_preds, inst_word_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test, args)
+            metrics = evaluate(word_preds, test, args)
+        
         if args.mode == 'predict5':
-            all_start_preds, all_end_preds = [], []
-            for fold in range(5):
+            all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = [], [], [], []
+            for fold in range(2):
                 load_model(model, run_root / ('best-model-%d.pt' % fold))
                 model.cuda()
-                _, fold_start_preds, fold_end_preds = predict(model, test, test_loader, args, progress=True, for_ensemble=True)
-                fold_start_preds = map_to_word(fold_start_preds, test, args)
-                fold_end_preds = map_to_word(fold_end_preds, test, args)
+                fold_whole_preds, fold_start_preds, fold_end_preds, fold_inst_preds = predict(model, test, test_loader, args, progress=True, for_ensemble=True)
+                # fold_start_preds = map_to_word(fold_start_preds, test, args, softmax=False)
+                # fold_end_preds = map_to_word(fold_end_preds, test, args, softmax=False)
+                # fold_inst_preds = map_to_word(fold_inst_preds, test, args, softmax=False)
+
+                all_whole_preds.append(fold_whole_preds)
                 all_start_preds.append(fold_start_preds)
                 all_end_preds.append(fold_end_preds)
-            all_start_preds, all_end_preds = ensemble(None, all_start_preds, all_end_preds, test)
-            preds = get_predicts_from_token_logits(None, all_start_preds, all_end_preds, test, args)
+                all_inst_preds.append(fold_inst_preds)
 
-        test['selected_text'] = preds
+            all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = ensemble(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test)
+            word_preds, inst_word_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test, args)
+
+        test['selected_text'] = word_preds
         test[['textID','selected_text']].to_csv('submission.csv', index=False)
 
 def train(args, model: nn.Module, optimizer, scheduler, *,

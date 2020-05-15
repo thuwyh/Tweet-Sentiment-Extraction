@@ -25,6 +25,36 @@ import re
 pattern = r"\w+[.]{1,5}\w+"
 pattern = re.compile(pattern)
 
+def prepare(text):
+    words = text.split()
+    retval, first_char, invert_map = [], [], []
+    current_pos = 0
+    for w in words:
+        word_ret = [""]
+        word_invert = [current_pos]
+        for p, c in enumerate(w):
+            if c in ['.',',','!','?','(',')',';',':','-']:
+                if word_ret[-1]=="":
+                    word_ret[-1]+=c
+                    word_invert[-1]=current_pos+p
+                else:
+                    word_ret.append(c)
+                    word_invert.append(current_pos+p)
+                word_ret.append("")
+                word_invert.append(current_pos+p+1)
+            else:
+                word_ret[-1]+=c
+        if len(word_ret[-1])==0:
+            word_ret.pop(-1)
+            word_invert.pop(-1)
+        word_first = [False if i>0 else True for i in range(len(word_ret)) ]
+        retval.extend(word_ret)
+        first_char.extend(word_first)
+        invert_map.extend(word_invert)
+        current_pos+=len(w)+1
+    assert len(retval)==len(first_char)
+    return retval, first_char, invert_map
+
 def decode(tokens, first_char, start, end):
     retval = ""
     for i in range(start, end+1):
@@ -160,24 +190,32 @@ def ensemble_words(word_preds):
         final_word_preds.append(' '.join(temp))
     return final_word_preds
 
-def ensemble(senti_preds, start_preds, end_preds, df):
+def ensemble(whole_preds, start_preds, end_preds, inst_preds, df):
     # 在logit层面融合
-    all_end_pred, all_start_pred = [], []
-    tokens = df['tokens'].tolist()
+    all_whole_preds, all_end_pred, all_start_pred, all_inst_preds = [], [], [], []
     model_num = len(start_preds)
     for b_idx in range(len(start_preds[0])):
         # merge one batch
+        whole_out = whole_preds[0][b_idx]
         start_out = start_preds[0][b_idx]
         end_out = end_preds[0][b_idx]
+        inst_out = inst_preds[0][b_idx]
         for m_idx in range(1, model_num):
+            whole_out += whole_preds[m_idx][b_idx]
             start_out += start_preds[m_idx][b_idx]
             end_out += end_preds[m_idx][b_idx]
+            inst_out += inst_preds[m_idx][b_idx]
+        
+        whole_out = whole_out/model_num
         start_out = start_out/model_num
         end_out = end_out/model_num
+        inst_out = inst_out/model_num
 
+        all_whole_preds.append(whole_out)
         all_start_pred.append(start_out)
         all_end_pred.append(end_out)
-    return all_start_pred, all_end_pred
+        all_inst_preds.append(inst_out)
+    return all_whole_preds, all_start_pred, all_end_pred, all_inst_preds
 
 
 def get_best_pred(start_pred, end_pred):
@@ -227,8 +265,8 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
 
 
 def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
-    all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=False)
-    all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=False)
+    all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=True)
+    all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=True)
     all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
     word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
     return word_preds, inst_word_preds, scores
@@ -246,8 +284,8 @@ def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_pred
     metrics = dict()
     metrics['loss'] = 0
     invert_maps = valid_df['invert_map'].tolist()
-    starts = valid_df['start'].tolist()
-    ends = valid_df['end'].tolist()
+    # starts = valid_df['start'].tolist()
+    # ends = valid_df['end'].tolist()
     texts = valid_df['text'].tolist()
     all_senti_labels = valid_df['senti_label'].values
     selected_texts = valid_df['selected_text'].tolist()
@@ -259,10 +297,10 @@ def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_pred
         words = text.lower().split()
         invert_map = invert_maps[idx]
         
-        start_word_label, end_word_label = invert_map[starts[idx]], invert_map[ends[idx]]
-        clean_label = ' '.join(words[start_word_label: end_word_label+1])
+        # start_word_label, end_word_label = invert_map[starts[idx]], invert_map[ends[idx]]
+        # clean_label = ' '.join(words[start_word_label: end_word_label+1])
         
-        clean_score_word += jaccard_string(word_preds[idx], clean_label)
+        # clean_score_word += jaccard_string(word_preds[idx], clean_label)
         # clean_score_token += jaccard_string(token_preds[idx], clean_label)
 
         # dirty label & dirty score
@@ -273,11 +311,11 @@ def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_pred
         if idx < 10:
             print(word_preds[idx], " || ", dirty_label)
 
-    metrics['clean_score_word'] = clean_score_word/len(texts)
+    # metrics['clean_score_word'] = clean_score_word/len(texts)
     metrics['dirty_score_word'] = dirty_score_word/len(texts)
 
     print(
-          'clean word:', metrics['clean_score_word'], 
+        #   'clean word:', metrics['clean_score_word'], 
           'dirty word:', metrics['dirty_score_word'])
     return metrics
 
