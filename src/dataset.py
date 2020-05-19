@@ -195,7 +195,16 @@ class TrainDataset(Dataset):
                 label = []
                 tokens, token_invert_map = [], []
                 
+                deletion_count = 0
                 for word_idx, w in enumerate(origin_words):
+                    # deletion
+                    if random.random()<0.05 and word_idx!=word_start:
+                        # if word_idx<word_start:
+                        #     word_start-=1
+                        # if word_idx<=word_end:
+                        #     word_end-=1
+                        # deletion_count+=1
+                        continue
                     if random.random()<0.5: # and word_idx!=word_start and word_idx!=word_end:
                         if w in self._syns_map:
                             w = self._syns_map[w]
@@ -215,7 +224,9 @@ class TrainDataset(Dataset):
                     inst.append(1)
                 else:
                     inst.append(0)
-
+            if len(is_label)==0:
+                print(deletion_count, word_start, word_end)
+                print(token_invert_map)
             start = min(is_label)+self._offset
             end = max(is_label)+self._offset
             inst = [-100]*self._offset+inst+[-100]
