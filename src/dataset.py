@@ -43,6 +43,13 @@ class TrainDataset(Dataset):
 
         self._text = self._data['text'].tolist()
         self._sentiment = self._data['sentiment'].tolist()
+        senti2label = {
+            'positive':2,
+            'negative':0,
+            'neutral':1
+        }
+        self._data['senti_label']=self._data['sentiment'].apply(lambda x: senti2label[x])
+        self._sentilabel = self._data['senti_label'].tolist()
         self.prepare_word()
 
         if mode == 'train':
@@ -124,6 +131,7 @@ class TrainDataset(Dataset):
             start_pos = text.find(st, end_pos)
             first_end = start_pos+len(st)
             temp[start_pos:first_end] = 1
+            
             label = []
             for word_idx, w in enumerate(words):
                 if sum(temp[invert_map[word_idx]:invert_map[word_idx]+len(w)]) > 0:
@@ -176,7 +184,7 @@ class TrainDataset(Dataset):
             inst = [-100]*(len(tokens)+self._offset+1)
             whole_sentence = 0
         else:
-            word_start, word_end = self._start[idx], self._end[idx]
+            word_start, word_end = self._start_word_idx[idx], self._end_word_idx[idx]
             is_label, inst = [], []
             if random.random()<0.1:
                 # aug, change the words
@@ -187,13 +195,13 @@ class TrainDataset(Dataset):
                 
                 for word_idx, w in enumerate(origin_words):
                     if random.random()<0.5 and word_idx!=word_start and word_idx!=word_end:
-                        if w in self._syn_map:
-                            w = self._syn_map[w]
+                        if w in self._syns_map:
+                            w = self._syns_map[w]
                     w = w.replace("`", "'")
                     started = False
-                    if self._start[idx]<=word_idx<=self._end[idx]:
+                    if word_start<=word_idx<=word_end:
                         started = True
-                    prefix = " " if first_char[idx] else ""
+                    prefix = " " if first_char[word_idx] else ""
                     for idx2, token in enumerate(self._tokenizer.tokenize(prefix+w)):
                         tokens.append(token)
                         token_invert_map.append(word_idx)
@@ -270,6 +278,6 @@ class MyCollator:
 if __name__ == '__main__':
     tokenizer = AutoTokenizer.from_pretrained(
         '../../bert_models/roberta_base/', cache_dir=None, do_lower_case=True)
-    df = pd.read_csv('../input/tweet-sentiment-extraction/train.csv')
-    df = df.iloc[:1600]
+    df = pd.read_csv('../input/tweet-sentiment-extraction/train_folds.csv')
+    # df = df.iloc[:1600]
     dataset = TrainDataset(df, tokenizer, mode='train')

@@ -112,7 +112,7 @@ def main():
     arg('--multi-gpu', type=int, default=0)
 
     arg('--bert-path', type=str, default='../../bert_models/roberta_base/')
-    arg('--train-file', type=str, default='train_roberta.pkl')
+    arg('--train-file', type=str, default='train_folds.csv')
     arg('--local-test', type=str, default='localtest_roberta.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
@@ -138,7 +138,7 @@ def main():
     set_seed(42)
 
     run_root = Path('../experiments/' + args.run_root)
-    DATA_ROOT = Path('../input/')
+    DATA_ROOT = Path('../input/tweet-sentiment-extraction/')
     tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=True)
     args.tokenizer = tokenizer
     if args.bert_path.find('roberta'):
@@ -146,15 +146,15 @@ def main():
     else:
         # this is for bert models
         collator = MyCollator(token_pad_value=0, type_pad_value=1)
-    folds = pd.read_pickle(DATA_ROOT / args.train_file)
+    folds = pd.read_csv(DATA_ROOT / args.train_file)
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
         # folds = pd.read_pickle(DATA_ROOT / args.train_file)
-        train_fold = folds[folds['fold'] != args.fold]
+        train_fold = folds[folds['kfold'] != args.fold]
         if args.abandon:
             train_fold = train_fold[train_fold['label_jaccard']>0.6]
         if args.no_neutral:
             train_fold = train_fold[train_fold['sentiment']!='neutral']
-        valid_fold = folds[folds['fold'] == args.fold]
+        valid_fold = folds[folds['kfold'] == args.fold]
         # remove pseudo samples
         if 'type' in valid_fold.columns.tolist():
             valid_fold = valid_fold[valid_fold['type']=='normal']
