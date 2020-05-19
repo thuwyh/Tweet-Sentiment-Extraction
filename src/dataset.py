@@ -8,6 +8,8 @@ import pandas as pd
 import numpy as np
 import random
 
+import warnings
+warnings.filterwarnings("ignore")
 
 def clean(x):
     sp_x = x.split()
@@ -186,7 +188,7 @@ class TrainDataset(Dataset):
         else:
             word_start, word_end = self._start_word_idx[idx], self._end_word_idx[idx]
             is_label, inst = [], []
-            if random.random()<0.1:
+            if random.random()<0.3:
                 # aug, change the words
                 words, origin_words = [], self._words[idx]
                 first_char = self._first_char[idx]
@@ -194,13 +196,11 @@ class TrainDataset(Dataset):
                 tokens, token_invert_map = [], []
                 
                 for word_idx, w in enumerate(origin_words):
-                    if random.random()<0.5 and word_idx!=word_start and word_idx!=word_end:
+                    if random.random()<0.5: # and word_idx!=word_start and word_idx!=word_end:
                         if w in self._syns_map:
                             w = self._syns_map[w]
                     w = w.replace("`", "'")
-                    started = False
-                    if word_start<=word_idx<=word_end:
-                        started = True
+
                     prefix = " " if first_char[word_idx] else ""
                     for idx2, token in enumerate(self._tokenizer.tokenize(prefix+w)):
                         tokens.append(token)

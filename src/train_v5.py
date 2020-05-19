@@ -413,28 +413,28 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             else:
                 loss.backward()
 
-            # fgm.attack() 
-            # whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
-            # # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
-            # # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
-            # whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
-            # if args.smooth:
-            #     start_out = torch.log_softmax(start_out, dim=-1)
-            #     end_out = torch.log_softmax(end_out, dim=-1)
-            #     start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
-            # else:
-            #     start_loss = loss_fn(start_out, starts)
-            #     end_loss = loss_fn(end_out, ends)
-            # inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
-            # loss = (start_loss+end_loss)+inst_loss+whole_loss
+            fgm.attack() 
+            whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
+            # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
+            whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
+            if args.smooth:
+                start_out = torch.log_softmax(start_out, dim=-1)
+                end_out = torch.log_softmax(end_out, dim=-1)
+                start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
+            else:
+                start_loss = loss_fn(start_out, starts)
+                end_loss = loss_fn(end_out, ends)
+            inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
+            loss = (start_loss+end_loss)+inst_loss+whole_loss
 
-            # if args.fp16:
-            #     with amp.scale_loss(loss, optimizer) as scaled_loss:
-            #         scaled_loss.backward()
-            # else:
-            #     loss.backward()
+            if args.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
                 
-            # fgm.restore()
+            fgm.restore()
             if i%args.step==0:
                 if args.max_grad_norm > 0:
                     if args.fp16:

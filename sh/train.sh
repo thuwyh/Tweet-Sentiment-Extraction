@@ -14,11 +14,11 @@ cd ../src
 # python train_v4.py train test_roberta5 --batch-size 16 --train-file train_roberta2.pkl --fold 4 --bert-path ../../bert_models/finetuned_roberta/ --post #--weight_decay 0.01
 
 # aug data
-# python train_v5.py train test --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--clean #--weight_decay 0.01 #
-# python train_v5.py train test --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-# python train_v5.py train test --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v5.py train test --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v5.py train test --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v5.py train v5 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--clean #--weight_decay 0.01 #
+python train_v5.py train v5 --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v5.py train v5 --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v5.py train v5 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v5.py train v5 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
 
 
 # pseudo+smooth pseudo
