@@ -14,11 +14,27 @@ cd ../src
 # python train_v4.py train test_roberta5 --batch-size 16 --train-file train_roberta2.pkl --fold 4 --bert-path ../../bert_models/finetuned_roberta/ --post #--weight_decay 0.01
 
 # aug data
-# python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta4.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--clean #--weight_decay 0.01 #
-# python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta4.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta4.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta4.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v4.py train test_roberta6 --batch-size 16 --train-file train_roberta4.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+
+# pseudo+smooth pseudo
+# python train_v4.py train 4gm_p_s --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post --smooth #--clean #--weight_decay 0.01 #
+# python train_v4.py train 4gm_p_s --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+# python train_v4.py train 4gm_p_s --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+# python train_v4.py train 4gm_p_s --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+# python train_v4.py train 4gm_p_s --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+
+# pseudo + smooth all no fgm
+python train_v4.py train 4gm_p_s_nofgm --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post --smooth --clean #--weight_decay 0.01 #
+python train_v4.py train 4gm_p_s_nofgm --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+python train_v4.py train 4gm_p_s_nofgm --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+python train_v4.py train 4gm_p_s_nofgm --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+python train_v4.py train 4gm_p_s_nofgm --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post --smooth #--weight_decay 0.01
+
+# pseudo
+# python train_v4.py train test_roberta6_pseudo --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--clean #--weight_decay 0.01 #
+# python train_v4.py train test_roberta6_pseudo --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v4.py train test_roberta6_pseudo --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v4.py train test_roberta6_pseudo --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v4.py train test_roberta6_pseudo --batch-size 16 --train-file train_roberta4_pseudo.pkl --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
 
 # python train_v4.py predict test_roberta6 --batch-size 16 --test-file train.csv --train-file train_roberta3.pkl --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--clean #--weight_decay 0.01 #
 

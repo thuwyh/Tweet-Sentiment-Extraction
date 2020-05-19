@@ -51,11 +51,15 @@ class FGM():
             
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.1):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
         super(TrainDataset, self).__init__()
         self._tokens = data['tokens'].tolist()
         self._sentilabel = data['senti_label'].tolist()
-        self._sentiment = data['sentiment'].tolist()            
+        self._sentiment = data['sentiment'].tolist()
+        if 'type' in data.columns.tolist():
+            self._type = data['type'].tolist()
+        else:
+            self._type = ['normal']*len(self._tokens)
         self._data = data
         self._mode = mode
         self._smooth = smooth
@@ -113,19 +117,24 @@ class TrainDataset(Dataset):
                 start, end = torch.zeros_like(token_id, dtype=torch.float), torch.zeros_like(token_id, dtype=torch.float)
                 # start = start*self._epsilon/torch.sum(start)
                 # end = end*self._epsilon/torch.sum(end)
-                start[start_idx] += 1-self._epsilon
-                end[end_idx] += 1-self._epsilon
+                # if self._type[idx]!='normal':
+                if True:
+                    start[start_idx] += 1-self._epsilon
+                    end[end_idx] += 1-self._epsilon
 
-                if start_idx>0:
-                    start[start_idx-1]= self._epsilon/2
-                if start_idx<len(start)-1:
-                    start[start_idx+1] = self._epsilon/2
-                if end_idx>0:
-                    end[end_idx-1] = self._epsilon/2
-                if end_idx<len(end)-1:
-                    end[end_idx+1] = self._epsilon/2
-                # start+=self._epsilon/len(mask)
-                # end+=self._epsilon/len(mask)
+                    # if start_idx>0:
+                    #     start[start_idx-1]= self._epsilon/2
+                    # if start_idx<len(start)-1:
+                    #     start[start_idx+1] = self._epsilon/2
+                    # if end_idx>0:
+                    #     end[end_idx-1] = self._epsilon/2
+                    # if end_idx<len(end)-1:
+                    #     end[end_idx+1] = self._epsilon/2
+                    start+=self._epsilon/len(mask)
+                    end+=self._epsilon/len(mask)
+                else:
+                    start[start_idx] += 1
+                    end[end_idx] += 1
             all_sentence = whole_sentence
         else:
             start, end = 0, 0
@@ -520,28 +529,28 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             else:
                 loss.backward()
 
-            fgm.attack() 
-            whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
-            # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
-            # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
-            whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
-            if args.smooth:
-                start_out = torch.log_softmax(start_out, dim=-1)
-                end_out = torch.log_softmax(end_out, dim=-1)
-                start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
-            else:
-                start_loss = loss_fn(start_out, starts)
-                end_loss = loss_fn(end_out, ends)
-            inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
-            loss = (start_loss+end_loss)+inst_loss+whole_loss
+            # fgm.attack() 
+            # whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            # # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
+            # # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
+            # whole_loss = bce_fn(whole_out, all_sentence.view(-1, 1))
+            # if args.smooth:
+            #     start_out = torch.log_softmax(start_out, dim=-1)
+            #     end_out = torch.log_softmax(end_out, dim=-1)
+            #     start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
+            # else:
+            #     start_loss = loss_fn(start_out, starts)
+            #     end_loss = loss_fn(end_out, ends)
+            # inst_loss = loss_fn(inst_out.permute(0,2,1), inst)
+            # loss = (start_loss+end_loss)+inst_loss+whole_loss
 
-            if args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
+            # if args.fp16:
+            #     with amp.scale_loss(loss, optimizer) as scaled_loss:
+            #         scaled_loss.backward()
+            # else:
+            #     loss.backward()
                 
-            fgm.restore()
+            # fgm.restore()
             if i%args.step==0:
                 if args.max_grad_norm > 0:
                     if args.fp16:
