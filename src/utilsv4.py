@@ -190,20 +190,28 @@ def ensemble_words(word_preds):
         final_word_preds.append(' '.join(temp))
     return final_word_preds
 
-def ensemble(whole_preds, start_preds, end_preds, inst_preds, df):
+def ensemble(whole_preds, start_preds, end_preds, inst_preds, df, softmax=False):
     # 在logit层面融合
     all_whole_preds, all_end_pred, all_start_pred, all_inst_preds = [], [], [], []
     model_num = len(start_preds)
     for b_idx in range(len(start_preds[0])):
         # merge one batch
         whole_out = whole_preds[0][b_idx]
-        start_out = start_preds[0][b_idx]
-        end_out = end_preds[0][b_idx]
+        if softmax:
+            start_out = torch.softmax(start_preds[0][b_idx], axis=-1)
+            end_out = torch.softmax(end_preds[0][b_idx], axis=-1)
+        else:
+            start_out = start_preds[0][b_idx]
+            end_out = end_preds[0][b_idx]
         inst_out = inst_preds[0][b_idx]
         for m_idx in range(1, model_num):
             whole_out += whole_preds[m_idx][b_idx]
-            start_out += start_preds[m_idx][b_idx]
-            end_out += end_preds[m_idx][b_idx]
+            if softmax:
+                start_out += torch.softmax(start_preds[m_idx][b_idx], axis=-1)
+                end_out += torch.softmax(end_preds[m_idx][b_idx], axis=-1)
+            else:
+                start_out += start_preds[m_idx][b_idx]
+                end_out += end_preds[m_idx][b_idx]
             inst_out += inst_preds[m_idx][b_idx]
         
         whole_out = whole_out/model_num
@@ -264,9 +272,9 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
     return word_preds, inst_word_preds, scores
 
 
-def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
-    all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=True)
-    all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=True)
+def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args, softmax=False):
+    all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=softmax)
+    all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=softmax)
     all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
     word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
     return word_preds, inst_word_preds, scores

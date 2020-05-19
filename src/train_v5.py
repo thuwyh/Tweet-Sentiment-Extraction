@@ -26,7 +26,7 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
 
 from utilsv4 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words, prepare,
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
-
+from dataset import TrainDataset, MyCollator
 
 class FGM():
     def __init__(self, model):
@@ -48,122 +48,6 @@ class FGM():
                 assert name in self.backup
                 param.data = self.backup[name]
             self.backup = {}
-            
-class TrainDataset(Dataset):
-
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
-        super(TrainDataset, self).__init__()
-        self._tokens = data['tokens'].tolist()
-        self._sentilabel = data['senti_label'].tolist()
-        self._sentiment = data['sentiment'].tolist()
-        if 'type' in data.columns.tolist():
-            self._type = data['type'].tolist()
-        else:
-            self._type = ['normal']*len(self._tokens)
-        self._data = data
-        self._mode = mode
-        self._smooth = smooth
-        self._epsilon = epsilon
-        if mode in ['train', 'valid']:
-            self._start = data['start'].tolist()
-            self._end = data['end'].tolist()
-            self._all_sentence = data['all_sentence'].tolist()
-            self._inst = data['in_st'].tolist()
-        else:
-            pass
-        self._tokenizer = tokenizer
-        self._offset = 4 if isinstance(tokenizer, RobertaTokenizer) else 3
-
-    def __len__(self):
-        return len(self._tokens)
-
-    def get_other_sample(self, idx, sentiment):
-        while True:
-            idx = random.randint(0,len(self._tokens)-1)
-            if self._sentiment[idx]!=sentiment:
-                return self._tokens[idx]
-
-    def __getitem__(self, idx):
-        sentiment = self._sentiment[idx]
-        tokens = self._tokens[idx]
-        if self._mode=='train':
-            inst = self._inst[idx]
-            whole_sentence = self._all_sentence[idx]
-
-        # if self._mode=='train':
-        #     if sentiment!='neutral' and random.random()<-0.05:
-        #         aug_tokens = self.get_other_sample(idx, sentiment)
-        #         tokens = tokens+aug_tokens
-        #         inst = inst+[-100 for i in range(len(aug_tokens))]
-        #         whole_sentence = 0
-
-        inputs = self._tokenizer.encode_plus(
-            sentiment, tokens, return_tensors='pt')
-
-        token_id = inputs['input_ids'][0]
-        if 'token_type_ids' in inputs:
-            type_id = inputs['token_type_ids'][0]
-        else:
-            type_id = torch.zeros_like(token_id)
-        mask = inputs['attention_mask'][0]
-
-        if self._mode == 'train':
-            inst = [-100]*self._offset+inst+[-100]
-            start = self._start[idx]+self._offset
-            end = self._end[idx]+self._offset
-
-            if self._smooth:
-                start_idx, end_idx = start, end
-                start, end = torch.zeros_like(token_id, dtype=torch.float), torch.zeros_like(token_id, dtype=torch.float)
-                # start = start*self._epsilon/torch.sum(start)
-                # end = end*self._epsilon/torch.sum(end)
-                # if self._type[idx]!='normal':
-                if True:
-                    start[start_idx] += 1-self._epsilon
-                    end[end_idx] += 1-self._epsilon
-
-                    # if start_idx>0:
-                    #     start[start_idx-1]= self._epsilon/2
-                    # if start_idx<len(start)-1:
-                    #     start[start_idx+1] = self._epsilon/2
-                    # if end_idx>0:
-                    #     end[end_idx-1] = self._epsilon/2
-                    # if end_idx<len(end)-1:
-                    #     end[end_idx+1] = self._epsilon/2
-                    start+=self._epsilon/len(mask)
-                    end+=self._epsilon/len(mask)
-                else:
-                    start[start_idx] += 1
-                    end[end_idx] += 1
-            all_sentence = whole_sentence
-        else:
-            start, end = 0, 0
-            inst = [-100]*len(token_id)
-            all_sentence = 0
-        return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst), all_sentence
-
-class MyCollator:
-
-    def __init__(self, token_pad_value=1, type_pad_value=0):
-        super().__init__()
-        self.token_pad_value = token_pad_value
-        self.type_pad_value = type_pad_value
-
-    def __call__(self, batch):
-        tokens, type_ids, masks, label, start, end, inst, all_sentence = zip(*batch)
-        tokens = pad_sequence(tokens, batch_first=True, padding_value=self.token_pad_value)
-        type_ids = pad_sequence(type_ids, batch_first=True, padding_value=self.type_pad_value)
-        masks = pad_sequence(masks, batch_first=True, padding_value=0)
-        label = torch.LongTensor(label)
-        if not isinstance(start[0], int):
-            start = pad_sequence(start, batch_first=True, padding_value=0)
-            end = pad_sequence(end, batch_first=True, padding_value=0)
-        else:
-            start = torch.LongTensor(start)
-            end = torch.LongTensor(end)
-        all_sentence = torch.FloatTensor(all_sentence)
-        inst = pad_sequence(inst, batch_first=True, padding_value=-100)
-        return tokens, type_ids, masks, label, start, end, inst, all_sentence
 
 
 class TweetModel(nn.Module):

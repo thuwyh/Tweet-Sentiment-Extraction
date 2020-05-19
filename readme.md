@@ -60,8 +60,8 @@
 - 4GM data+seed 42+finetune LM: cv 0.71509, lb: 0.715
 
 ### 2020.05.19
-- 4GM data+seed 42+0.716sub smooth: cv 0.7165
-- 4GM data+seed 42+0.716sub, all smooth, without fgm: cv 0.71588
+- 4GM data+seed 42+0.716sub smooth: cv 0.7165, lb: 0.716
+- 4GM data+seed 42+0.716sub, all smooth, without fgm: cv 0.71588, lb 0.714
 
 ### todo
 - [x] 星号相关的探索
