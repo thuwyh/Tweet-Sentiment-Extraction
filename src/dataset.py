@@ -11,6 +11,7 @@ import random
 import warnings
 warnings.filterwarnings("ignore")
 
+
 def clean(x):
     sp_x = x.split()
     if len(sp_x[0]) == 1 and len(sp_x) > 1 and sp_x[0].lower() not in ['i', 'a', 'u'] and not sp_x[0].isdigit():
@@ -22,9 +23,6 @@ class TrainDataset(Dataset):
 
     def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
         super(TrainDataset, self).__init__()
-        # self._tokens = data['tokens'].tolist()
-        # self._sentilabel = data['senti_label'].tolist()
-        # self._sentiment = data['sentiment'].tolist()
         # if 'type' in data.columns.tolist():
         #     self._type = data['type'].tolist()
         # else:
@@ -46,11 +44,12 @@ class TrainDataset(Dataset):
         self._text = self._data['text'].tolist()
         self._sentiment = self._data['sentiment'].tolist()
         senti2label = {
-            'positive':2,
-            'negative':0,
-            'neutral':1
+            'positive': 2,
+            'negative': 0,
+            'neutral': 1
         }
-        self._data['senti_label']=self._data['sentiment'].apply(lambda x: senti2label[x])
+        self._data['senti_label'] = self._data['sentiment'].apply(
+            lambda x: senti2label[x])
         self._sentilabel = self._data['senti_label'].tolist()
         self.prepare_word()
 
@@ -63,13 +62,6 @@ class TrainDataset(Dataset):
         self._mode = mode
         self._smooth = smooth
         self._epsilon = epsilon
-        # if mode in ['train', 'valid']:
-        #     self._start = data['start'].tolist()
-        #     self._end = data['end'].tolist()
-        #     self._all_sentence = data['all_sentence'].tolist()
-        #     self._inst = data['in_st'].tolist()
-        # else:
-        #     pass
 
         self._offset = 4 if isinstance(tokenizer, RobertaTokenizer) else 3
 
@@ -101,10 +93,11 @@ class TrainDataset(Dataset):
                     prefix = " "
                 else:
                     prefix = ""
-                for idx2, token in enumerate(self._tokenizer.tokenize(prefix+w)):
+                for token in self._tokenizer.tokenize(prefix+w):
                     tokens.append(token)
                     token_invert_map.append(idx)
-            data.append((words, first_char, tokens, token_invert_map, invert_map))
+            data.append((words, first_char, tokens,
+                         token_invert_map, invert_map))
         words, first_char, tokens, invert_map, word_invert_map = zip(*data)
         self._words = words
         self._first_char = first_char
@@ -113,8 +106,9 @@ class TrainDataset(Dataset):
         self._tokens = tokens
         self._data['first_char'] = first_char
         self._data['words'] = words
-        self._data['invert_map'] = invert_map # token id to word id
-        self._data['word_invert_map'] = word_invert_map # word to pos in sentence
+        self._data['invert_map'] = invert_map  # token id to word id
+        # word to pos in sentence
+        self._data['word_invert_map'] = word_invert_map
         print('total unique words:', len(self._all_words))
 
     def get_label(self):
@@ -133,7 +127,7 @@ class TrainDataset(Dataset):
             start_pos = text.find(st, end_pos)
             first_end = start_pos+len(st)
             temp[start_pos:first_end] = 1
-            
+
             label = []
             for word_idx, w in enumerate(words):
                 if sum(temp[invert_map[word_idx]:invert_map[word_idx]+len(w)]) > 0:
@@ -188,43 +182,37 @@ class TrainDataset(Dataset):
         else:
             word_start, word_end = self._start_word_idx[idx], self._end_word_idx[idx]
             is_label, inst = [], []
-            if random.random()<0.3:
+            if random.random() < 0.2:
                 # aug, change the words
-                words, origin_words = [], self._words[idx]
+                origin_words = self._words[idx]
                 first_char = self._first_char[idx]
-                label = []
                 tokens, token_invert_map = [], []
-                
+
                 deletion_count = 0
                 for word_idx, w in enumerate(origin_words):
                     # deletion
-                    if random.random()<0.05 and word_idx!=word_start:
-                        # if word_idx<word_start:
-                        #     word_start-=1
-                        # if word_idx<=word_end:
-                        #     word_end-=1
-                        # deletion_count+=1
+                    if random.random() < 0.05 and word_idx != word_start:
                         continue
-                    if random.random()<0.5: # and word_idx!=word_start and word_idx!=word_end:
+                    if random.random() < 0.3:  # and word_idx!=word_start and word_idx!=word_end:
                         if w in self._syns_map:
                             w = self._syns_map[w]
                     w = w.replace("`", "'")
 
                     prefix = " " if first_char[word_idx] else ""
-                    for idx2, token in enumerate(self._tokenizer.tokenize(prefix+w)):
+                    for token in self._tokenizer.tokenize(prefix+w):
                         tokens.append(token)
                         token_invert_map.append(word_idx)
             else:
                 tokens = self._tokens[idx]
                 token_invert_map = self._invert_map[idx]
-           
+
             for i in range(len(tokens)):
-                if word_start<=token_invert_map[i]<=word_end:
+                if word_start <= token_invert_map[i] <= word_end:
                     is_label.append(i)
                     inst.append(1)
                 else:
                     inst.append(0)
-            if len(is_label)==0:
+            if len(is_label) == 0:
                 print(deletion_count, word_start, word_end)
                 print(token_invert_map)
             start = min(is_label)+self._offset
@@ -242,7 +230,7 @@ class TrainDataset(Dataset):
             type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
 
-        if self._mode=='train' and self._smooth:
+        if self._mode == 'train' and self._smooth:
             start_idx, end_idx = start, end
             start, end = torch.zeros_like(token_id, dtype=torch.float), torch.zeros_like(
                 token_id, dtype=torch.float)
@@ -255,7 +243,7 @@ class TrainDataset(Dataset):
             else:
                 start[start_idx] += 1
                 end[end_idx] += 1
-            
+
         return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst), whole_sentence
 
 
