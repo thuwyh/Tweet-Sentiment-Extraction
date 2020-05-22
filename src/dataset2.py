@@ -34,15 +34,16 @@ class TrainDataset(Dataset):
         self._data.dropna(subset=['text'], how='any', inplace=True)
 
         self._data['text'] = self._data['text'].apply(
-            lambda x: ' '.join(x.lower().strip().split()))
+            lambda x: ' '.join(x.strip().split()))
         if 'selected_text' in self._data.columns.tolist():
             self._data['selected_text'] = self._data['selected_text'].apply(
-                lambda x: ' '.join(x.lower().strip().split()))
+                lambda x: ' '.join(x.strip().split()))
             self._data['c_selected_text'] = self._data['selected_text'].apply(
                 lambda x: clean(x))
 
         self._text = self._data['text'].tolist()
         self._sentiment = self._data['sentiment'].tolist()
+        self._sentiment2 = self._data['old_sentiment'].tolist()
         senti2label = {
             'positive': 2,
             'negative': 0,
@@ -62,7 +63,7 @@ class TrainDataset(Dataset):
         self._mode = mode
         self._smooth = smooth
         self._epsilon = epsilon
-        self._offset = 4 if isinstance(tokenizer, RobertaTokenizer) else 3
+        self._offset = 5 if isinstance(tokenizer, RobertaTokenizer) else 4
 
 
     def get_syns(self):
@@ -173,6 +174,7 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
+        sentiment2 = self._sentiment2[idx]
         if self._mode != 'train':
             # just return tokens and labels
             tokens = self._tokens[idx]
@@ -182,6 +184,8 @@ class TrainDataset(Dataset):
         else:
             word_start, word_end = self._start_word_idx[idx], self._end_word_idx[idx]
             is_label, inst = [], []
+            if random.random()<0.2:
+                sentiment2 = 'unknown'
             if random.random() < 0.1:
                 # aug, change the words
                 origin_words = self._words[idx]
@@ -224,7 +228,7 @@ class TrainDataset(Dataset):
             whole_sentence = self._whole_sentence[idx]
 
         inputs = self._tokenizer.encode_plus(
-            sentiment, tokens, return_tensors='pt')
+            sentiment+' '+sentiment2, tokens, return_tensors='pt')
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:

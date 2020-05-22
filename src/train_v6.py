@@ -26,7 +26,7 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
 
 from utilsv5 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words, prepare,
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
-from dataset import TrainDataset, MyCollator
+from dataset2 import TrainDataset, MyCollator
 
 class FGM():
     def __init__(self, model):
@@ -112,7 +112,7 @@ def main():
     arg('--multi-gpu', type=int, default=0)
 
     arg('--bert-path', type=str, default='../../bert_models/roberta_base/')
-    arg('--train-file', type=str, default='train_folds.csv')
+    arg('--train-file', type=str, default='train_folds_with_o.csv')
     arg('--local-test', type=str, default='localtest_roberta.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
@@ -126,7 +126,7 @@ def main():
     arg('--max_grad_norm', type=float, default=-1.0)
     arg('--weight_decay', type=float, default=0.0)
     arg('--adam-epsilon', type=float, default=1e-6)
-    arg('--offset', type=int, default=4)
+    arg('--offset', type=int, default=5)
     arg('--best-loss', action='store_true')
     arg('--abandon', action='store_true')
     arg('--post', action='store_true')
@@ -139,7 +139,7 @@ def main():
 
     run_root = Path('../experiments/' + args.run_root)
     DATA_ROOT = Path('../input/tweet-sentiment-extraction/')
-    tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=True)
+    tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=False)
     args.tokenizer = tokenizer
     if args.bert_path.find('roberta'):
         collator = MyCollator()
