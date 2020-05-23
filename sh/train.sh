@@ -34,8 +34,14 @@ cd ../src
 # python train_v6.py train v6 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
 # python train_v6.py train v6 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
 
-python train_v6.py validate v6 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--smooth #--clean #--weight_decay 0.01 #
-python train_v6.py validate v6 --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v6.py validate v6 --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v6.py validate v6 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
-python train_v6.py validate v6 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v6.py validate v6 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--smooth #--clean #--weight_decay 0.01 #
+# python train_v6.py validate v6 --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v6.py validate v6 --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v6.py validate v6 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+# python train_v6.py validate v6 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+
+python train_v7.py train v7 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--smooth #--clean #--weight_decay 0.01 #
+python train_v7.py train v7 --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v7.py train v7 --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v7.py train v7 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01
+python train_v7.py train v7 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --post #--smooth #--weight_decay 0.01

@@ -21,7 +21,7 @@ def clean(x):
 
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.15):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.0):
         super(TrainDataset, self).__init__()
         # if 'type' in data.columns.tolist():
         #     self._type = data['type'].tolist()
@@ -43,6 +43,7 @@ class TrainDataset(Dataset):
 
         self._text = self._data['text'].tolist()
         self._sentiment = self._data['sentiment'].tolist()
+        # self._sentiment2 = self._data['old_sentiment'].tolist()
         senti2label = {
             'positive': 2,
             'negative': 0,
@@ -62,7 +63,7 @@ class TrainDataset(Dataset):
         self._mode = mode
         self._smooth = smooth
         self._epsilon = epsilon
-        self._offset = 5 if isinstance(tokenizer, RobertaTokenizer) else 4
+        self._offset = 4 if isinstance(tokenizer, RobertaTokenizer) else 3
 
 
     def get_syns(self):
@@ -173,7 +174,7 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
-        sentiment2 = self._sentiment2[idx]
+        # sentiment2 = self._sentiment2[idx]
         if self._mode != 'train':
             # just return tokens and labels
             tokens = self._tokens[idx]
@@ -183,8 +184,8 @@ class TrainDataset(Dataset):
         else:
             word_start, word_end = self._start_word_idx[idx], self._end_word_idx[idx]
             is_label, inst = [], []
-            if random.random()<0.2:
-                sentiment2 = 'unknown'
+            # if random.random()<0.2:
+            #     sentiment2 = 'unknown'
             if random.random() < 0.1:
                 # aug, change the words
                 origin_words = self._words[idx]
@@ -194,17 +195,16 @@ class TrainDataset(Dataset):
                 deletion_count = 0
                 for word_idx, w in enumerate(origin_words):
                     # deletion
-                    # if random.random() < 0.05 and word_idx != word_start:
-                    #     continue
+                    if random.random() < 0.05 and word_idx != word_start:
+                        continue
                     if random.random() < 0.5:  # and word_idx!=word_start and word_idx!=word_end:
                         if w in self._syns_map:
                             w = self._syns_map[w]
                     w = w.replace("`", "'")
-
                     prefix = " " if first_char[word_idx] else ""
                     for token in self._tokenizer.tokenize(prefix+w):
                         if random.random()<0.02:
-                            random_token_id = random.randint(100, self._tokenizer.vocab_size)
+                            random_token_id = random.randint(4, self._tokenizer.vocab_size)
                             token = self._tokenizer.convert_ids_to_tokens(random_token_id)
                         tokens.append(token)
                         token_invert_map.append(word_idx)
@@ -227,7 +227,7 @@ class TrainDataset(Dataset):
             whole_sentence = self._whole_sentence[idx]
 
         inputs = self._tokenizer.encode_plus(
-            sentiment+' '+sentiment2, tokens, return_tensors='pt')
+            sentiment, tokens, return_tensors='pt')
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:
@@ -236,19 +236,16 @@ class TrainDataset(Dataset):
             type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
 
-        if self._mode == 'train' and self._smooth:
-            start_idx, end_idx = start, end
-            start, end = torch.zeros_like(token_id, dtype=torch.float), torch.zeros_like(
-                token_id, dtype=torch.float)
-            if True:
-                start[start_idx] += 1-self._epsilon
-                end[end_idx] += 1-self._epsilon
+        start_idx, end_idx = start, end
+        start = torch.zeros_like(token_id, dtype=torch.float)
+        end = torch.zeros_like(token_id, dtype=torch.float)
+        
+        start[start_idx] += 1-self._epsilon
+        end[end_idx] += 1-self._epsilon
 
-                start += self._epsilon/len(mask)
-                end += self._epsilon/len(mask)
-            else:
-                start[start_idx] += 1
-                end[end_idx] += 1
+        start += self._epsilon/len(mask)
+        end += self._epsilon/len(mask)
+       
 
         return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst), whole_sentence
 
@@ -269,12 +266,9 @@ class MyCollator:
             type_ids, batch_first=True, padding_value=self.type_pad_value)
         masks = pad_sequence(masks, batch_first=True, padding_value=0)
         label = torch.LongTensor(label)
-        if not isinstance(start[0], int):
-            start = pad_sequence(start, batch_first=True, padding_value=0)
-            end = pad_sequence(end, batch_first=True, padding_value=0)
-        else:
-            start = torch.LongTensor(start)
-            end = torch.LongTensor(end)
+        start = pad_sequence(start, batch_first=True, padding_value=0)
+        end = pad_sequence(end, batch_first=True, padding_value=0)
+
         all_sentence = torch.FloatTensor(all_sentence)
         inst = pad_sequence(inst, batch_first=True, padding_value=-100)
         return tokens, type_ids, masks, label, start, end, inst, all_sentence
