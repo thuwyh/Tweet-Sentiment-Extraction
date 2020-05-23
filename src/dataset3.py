@@ -21,7 +21,7 @@ def clean(x):
 
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.0):
+    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.0, distill=False):
         super(TrainDataset, self).__init__()
         # if 'type' in data.columns.tolist():
         #     self._type = data['type'].tolist()
@@ -63,6 +63,11 @@ class TrainDataset(Dataset):
         self._mode = mode
         self._smooth = smooth
         self._epsilon = epsilon
+        self._distill = distill
+
+        if distill:
+            self._start_pred = data['start_pred'].tolist()
+            self._end_pred = data['end_pred'].tolist()
         self._offset = 4 if isinstance(tokenizer, RobertaTokenizer) else 3
 
 
@@ -178,15 +183,16 @@ class TrainDataset(Dataset):
         if self._mode != 'train':
             # just return tokens and labels
             tokens = self._tokens[idx]
-            start, end = 0, 0
+            start_idx, end_idx = 0, 0
             inst = [-100]*(len(tokens)+self._offset+1)
+            start = end = inst
             whole_sentence = 0
         else:
             word_start, word_end = self._start_word_idx[idx], self._end_word_idx[idx]
             is_label, inst = [], []
             # if random.random()<0.2:
             #     sentiment2 = 'unknown'
-            if random.random() < 0.1:
+            if random.random() < 0.1 and not self._distill:
                 # aug, change the words
                 origin_words = self._words[idx]
                 first_char = self._first_char[idx]
@@ -218,11 +224,9 @@ class TrainDataset(Dataset):
                     inst.append(1)
                 else:
                     inst.append(0)
-            if len(is_label) == 0:
-                print(deletion_count, word_start, word_end)
-                print(token_invert_map)
-            start = min(is_label)+self._offset
-            end = max(is_label)+self._offset
+
+            start_idx = min(is_label)+self._offset
+            end_idx = max(is_label)+self._offset
             inst = [-100]*self._offset+inst+[-100]
             whole_sentence = self._whole_sentence[idx]
 
@@ -236,18 +240,22 @@ class TrainDataset(Dataset):
             type_id = torch.zeros_like(token_id)
         mask = inputs['attention_mask'][0]
 
-        start_idx, end_idx = start, end
-        start = torch.zeros_like(token_id, dtype=torch.float)
-        end = torch.zeros_like(token_id, dtype=torch.float)
-        
-        start[start_idx] += 1-self._epsilon
-        end[end_idx] += 1-self._epsilon
+        if self._distill:
+            start = torch.FloatTensor([0]*self._offset+list(self._start_pred[idx][:len(tokens)])+[0])
+            end = torch.FloatTensor([0]*self._offset+list(self._end_pred[idx][:len(tokens)])+[0])
+            assert len(start)==len(token_id)
+        else:
+            start = torch.zeros_like(token_id, dtype=torch.float)
+            end = torch.zeros_like(token_id, dtype=torch.float)
+            
+            start[start_idx] += 1-self._epsilon
+            end[end_idx] += 1-self._epsilon
 
-        start += self._epsilon/len(mask)
-        end += self._epsilon/len(mask)
+            start += self._epsilon/len(mask)
+            end += self._epsilon/len(mask)
        
 
-        return token_id, type_id, mask, self._sentilabel[idx], start, end, torch.LongTensor(inst), whole_sentence
+        return token_id, type_id, mask, self._sentilabel[idx], start, end, start_idx, end_idx, torch.LongTensor(inst), whole_sentence
 
 
 class MyCollator:
@@ -258,7 +266,7 @@ class MyCollator:
         self.type_pad_value = type_pad_value
 
     def __call__(self, batch):
-        tokens, type_ids, masks, label, start, end, inst, all_sentence = zip(
+        tokens, type_ids, masks, label, start, end, start_idx, end_idx, inst, all_sentence = zip(
             *batch)
         tokens = pad_sequence(tokens, batch_first=True,
                               padding_value=self.token_pad_value)
@@ -268,10 +276,11 @@ class MyCollator:
         label = torch.LongTensor(label)
         start = pad_sequence(start, batch_first=True, padding_value=0)
         end = pad_sequence(end, batch_first=True, padding_value=0)
-
+        start_idx = torch.LongTensor(start_idx)
+        end_idx = torch.LongTensor(end_idx)
         all_sentence = torch.FloatTensor(all_sentence)
         inst = pad_sequence(inst, batch_first=True, padding_value=-100)
-        return tokens, type_ids, masks, label, start, end, inst, all_sentence
+        return tokens, type_ids, masks, label, start, end, start_idx, end_idx, inst, all_sentence
 
 
 if __name__ == '__main__':

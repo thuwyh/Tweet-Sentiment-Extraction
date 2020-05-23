@@ -112,7 +112,7 @@ def main():
     arg('--multi-gpu', type=int, default=0)
 
     arg('--bert-path', type=str, default='../../bert_models/roberta_base/')
-    arg('--train-file', type=str, default='train_folds.csv')
+    arg('--train-file', type=str, default='preds.pkl')
     arg('--local-test', type=str, default='localtest_roberta.pkl')
     arg('--test-file', type=str, default='test.csv')
     arg('--output-file', type=str, default='result.csv')
@@ -147,9 +147,10 @@ def main():
     else:
         # this is for bert models
         collator = MyCollator(token_pad_value=0, type_pad_value=1)
-    folds = pd.read_csv(DATA_ROOT / args.train_file)
+
+    folds = pd.read_pickle(DATA_ROOT / args.train_file)
+
     if args.mode in ['train', 'validate', 'validate5', 'validate55', 'teacherpred']:
-        # folds = pd.read_pickle(DATA_ROOT / args.train_file)
         train_fold = folds[folds['kfold'] != args.fold]
         if args.abandon:
             train_fold = train_fold[train_fold['label_jaccard']>0.6]
@@ -170,7 +171,7 @@ def main():
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
 
-        training_set = TrainDataset(train_fold, tokenizer=tokenizer, smooth=args.smooth)
+        training_set = TrainDataset(train_fold, tokenizer=tokenizer, smooth=args.smooth, distill=args.distill)
         training_loader = DataLoader(training_set, collate_fn=collator,
                                      shuffle=True, batch_size=args.batch_size,
                                      num_workers=args.workers)
@@ -221,18 +222,14 @@ def main():
             valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                       num_workers=args.workers)
             fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
-                model, valid_fold, valid_loader, args, progress=True)
-            # word_preds, _, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args)
-            # metrics = evaluate(word_preds, valid_fold, args)
+                model, valid_fold, valid_loader, args, progress=True, softmax=True)
+            word_preds, _, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args)
+            metrics = evaluate(word_preds, valid_fold, args)
 
-            dis_start_pred, dis_end_pred = [], []
-            
-            for i in range(len(fold_start_pred)):
-                dis_start_pred.append(torch.softmax(fold_start_pred[i]/args.temperature, dim=-1).numpy()[args.offset:])
-                dis_end_pred.append(torch.softmax(fold_end_pred[i]/args.temperature, dim=-1).numpy()[args.offset:])
-            assert len(valid_fold)==len(dis_start_pred)
-            folds.loc[valid_fold.index, 'start_pred'] = dis_start_pred
-            folds.loc[valid_fold.index, 'end_pred'] = dis_end_pred
+            fold_start_pred = [x.numpy() for x in fold_start_pred]
+            fold_end_pred = [x.numpy() for x in fold_end_pred]
+            folds.loc[valid_fold.index, 'start_pred'] = fold_start_pred
+            folds.loc[valid_fold.index, 'end_pred'] = fold_end_pred
         folds.to_pickle(DATA_ROOT/'preds.pkl')
     
     elif args.mode == 'validate52':
@@ -375,8 +372,8 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
             if args.distill:
                 # hard label loss
-                start_loss += ce_fn(start_out, hard_starts)
-                end_loss += ce_fn(end_out, hard_ends)
+                start_loss = args.temperature**2*start_loss+0.5*ce_fn(start_out, hard_starts)
+                end_loss = args.temperature**2*end_loss+0.5*ce_fn(end_out, hard_ends)
             inst_loss = ce_fn(inst_out.permute(0,2,1), inst)
             loss = (start_loss+end_loss)+inst_loss+whole_loss
 
@@ -399,8 +396,8 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             start_loss, end_loss = kl_fn(start_out, starts), kl_fn(end_out, ends)
             if args.distill:
                 # hard label loss
-                start_loss += ce_fn(start_out, hard_starts)
-                end_loss += ce_fn(end_out, hard_ends)
+                start_loss = args.temperature**2*start_loss+0.5*ce_fn(start_out, hard_starts)
+                end_loss = args.temperature**2*end_loss+0.5*ce_fn(end_out, hard_ends)
             inst_loss = ce_fn(inst_out.permute(0,2,1), inst)
             loss = (start_loss+end_loss)+inst_loss+whole_loss
 
@@ -460,7 +457,8 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False) -> D
             types = types.cuda()
             whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
             start_out = start_out.masked_fill(~masks.bool(), -1000)
-            end_out= end_out.masked_fill(~masks.bool(), -1000)                
+            end_out= end_out.masked_fill(~masks.bool(), -1000)
+
             all_whole_pred.append(torch.sigmoid(whole_out).cpu().numpy())
             inst_out = torch.softmax(inst_out, dim=-1)
             for idx in range(len(start_out)):
