@@ -55,44 +55,48 @@ class TweetModel(nn.Module):
     def __init__(self, pretrain_path=None, dropout=0.2, config=None):
         super(TweetModel, self).__init__()
         if config is not None:
-            self.bert = AutoModel.from_config(config)
+            self.bert = AutoModel.from_config(config, output_hidden_states=True)
         else:
+            config = AutoConfig.from_pretrained(pretrain_path, output_hidden_states=True)
             self.bert = AutoModel.from_pretrained(
-                pretrain_path, cache_dir=None)
-        self.head = nn.Sequential(
-            OrderedDict([
-                ('clf', nn.Linear(self.bert.config.hidden_size, 1))
-            ])
-        )
-        self.cnn = nn.Sequential(
-            OrderedDict([
-                ('drop1', nn.Dropout(0.1)),
-                ('cnn', nn.Conv1d(self.bert.config.hidden_size, self.bert.config.hidden_size, 3, padding=1)),
-                ('act', nn.GELU()),
-            ])
-        )
-        self.ext_head = nn.Sequential(
-            OrderedDict([
-                ('se', nn.Linear(self.bert.config.hidden_size, 2))
-            ])
-        )
+                pretrain_path, cache_dir=None, config=config)
+        
+        self.cnn =  nn.Conv1d(self.bert.config.hidden_size, self.bert.config.hidden_size, 3, padding=1)
+        self.gelu = nn.GELU()
+
+        self.whole_head = nn.Linear(self.bert.config.hidden_size, 1)
+        self.se_head = nn.Linear(self.bert.config.hidden_size, 2)
         self.inst_head = nn.Linear(self.bert.config.hidden_size, 2)
-        self.dropout = nn.Dropout(0.1)
-        # for name, param in self.bert.embeddings.named_parameters():
+        self.dropout = nn.Dropout(0.2)
+
+        # nn.init.normal_(self.cnn.weight, std=0.02)
+        # nn.init.normal_(self.cnn.bias, 0)
+
+        # nn.init.normal_(self.whole_head.weight, std=0.02)
+        # nn.init.normal_(self.whole_head.bias, 0)
+
+        # nn.init.normal_(self.inst_head.weight, std=0.02)
+        # nn.init.normal_(self.inst_head.bias, 0)
+
+        # nn.init.normal_(self.se_head.weight, std=0.02)
+        # nn.init.normal_(self.se_head.bias, 0)
+        # # for name, param in self.bert.embeddings.named_parameters():
         #     param.requires_grad = False
         # for l in range(3):
         #     for param in self.bert.encoder.layer[l].parameters():
         #         param.requires_grad = False
 
     def forward(self, inputs, masks, token_type_ids=None, input_emb=None):
-        seq_output, pooled_output = self.bert(
+        _, pooled_output, hs = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
 
-        out = self.head(self.dropout(pooled_output))
-        seq_output = self.cnn(seq_output.permute(0,2,1)).permute(0,2,1)
-        se_out = self.ext_head(self.dropout(seq_output))  #()
+        seq_output = self.dropout(hs[-1])  # +hs[-2]+hs[-3]
+
+        whole_out = self.whole_head(self.dropout(pooled_output))
+        seq_output = self.gelu(self.cnn(seq_output.permute(0,2,1)).permute(0,2,1))
+        se_out = self.se_head(self.dropout(seq_output))  #()
         inst_out = self.inst_head(self.dropout(seq_output))
-        return out, se_out[:, :, 0], se_out[:, :, 1], inst_out
+        return whole_out, se_out[:, :, 0], se_out[:, :, 1], inst_out
 
 
 def main():
@@ -132,7 +136,7 @@ def main():
     arg('--abandon', action='store_true')
     arg('--post', action='store_true')
     arg('--smooth', action='store_true')
-    arg('--temperature', type=float, default=5.0)
+    arg('--temperature', type=float, default=1)
 
     args = parser.parse_args()
     args.vocab_path = args.bert_path
@@ -222,17 +226,19 @@ def main():
                                       num_workers=args.workers)
             fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            # word_preds, _, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args)
-            # metrics = evaluate(word_preds, valid_fold, args)
+            word_preds, _, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args, softmax=True)
+            metrics = evaluate(word_preds, valid_fold, args)
 
             dis_start_pred, dis_end_pred = [], []
             
             for i in range(len(fold_start_pred)):
-                dis_start_pred.append(torch.softmax(fold_start_pred[i]/args.temperature, dim=-1).numpy()[args.offset:])
-                dis_end_pred.append(torch.softmax(fold_end_pred[i]/args.temperature, dim=-1).numpy()[args.offset:])
+                dis_start_pred.append(torch.softmax(fold_start_pred[i][args.offset:]/args.temperature, dim=-1).numpy())
+                dis_end_pred.append(torch.softmax(fold_end_pred[i][args.offset:]/args.temperature, dim=-1).numpy())
             assert len(valid_fold)==len(dis_start_pred)
             folds.loc[valid_fold.index, 'start_pred'] = dis_start_pred
             folds.loc[valid_fold.index, 'end_pred'] = dis_end_pred
+            folds.loc[valid_fold.index, 'pred'] = word_preds
+            folds.loc[valid_fold.index, 'score'] = scores
         folds.to_pickle(DATA_ROOT/'preds.pkl')
     
     elif args.mode == 'validate52':
@@ -274,10 +280,10 @@ def main():
         word_preds, inst_word_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_fold, args, softmax=True)
         metrics = evaluate(word_preds, valid_fold, args)
         # metrics = evaluate(inst_word_preds, valid_fold, args)
-        valid_fold['pred'] = word_preds
-        valid_fold['score'] = scores
+        # valid_fold['pred'] = word_preds
+        # valid_fold['score'] = scores
         # valid_fold['inst_pred'] = inst_word_preds
-        valid_fold.to_csv(run_root/('pred-%d.csv'%args.fold), sep='\t', index=False)
+        # valid_fold.to_csv(run_root/('pred-%d.csv'%args.fold), sep='\t', index=False)
 
     elif args.mode in ['predict', 'predict5']:
         test = pd.read_csv(DATA_ROOT /args.test_file)       

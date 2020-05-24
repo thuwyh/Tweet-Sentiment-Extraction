@@ -94,7 +94,9 @@ class TrainDataset(Dataset):
             for idx, w in enumerate(words):
                 self._all_words.add(w)
                 # get tokens
+                w = w.replace("'", "\"")
                 w = w.replace("`", "'")
+                w = w.replace("ï¿½", "")
                 if first_char[idx]:
                     prefix = " "
                 else:
@@ -206,7 +208,9 @@ class TrainDataset(Dataset):
                     if random.random() < 0.5:  # and word_idx!=word_start and word_idx!=word_end:
                         if w in self._syns_map:
                             w = self._syns_map[w]
+                    w = w.replace("'", "\"")
                     w = w.replace("`", "'")
+                    w = w.replace("ï¿½", "")
                     prefix = " " if first_char[word_idx] else ""
                     for token in self._tokenizer.tokenize(prefix+w):
                         if random.random()<0.02:

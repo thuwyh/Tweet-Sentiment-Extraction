@@ -132,7 +132,7 @@ def main():
     arg('--abandon', action='store_true')
     arg('--post', action='store_true')
     arg('--smooth', action='store_true')
-    arg('--temperature', type=float, default=5.0)
+    arg('--temperature', type=float, default=10.0)
 
     args = parser.parse_args()
     args.vocab_path = args.bert_path

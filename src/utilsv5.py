@@ -33,7 +33,7 @@ def prepare(text):
         word_ret = [""]
         word_invert = [current_pos]
         for p, c in enumerate(w):
-            if c in ['.',',','!','?','(',')',';',':','-','=',"'","/","<","`"]:
+            if c in ['.',',','!','?','(',')',';',':','-','=',"/","<","`"]:
                 if word_ret[-1]=="":
                     word_ret[-1]+=c
                     word_invert[-1]=current_pos+p
@@ -241,6 +241,13 @@ def get_best_pred(start_pred, end_pred):
         print(top_start[:30], top_end[:30])
         return 0, 0
     else:
+        # scores, spans = 0, []
+        # for i in range(len(preds)):
+        #     spans.append((preds[i][0], preds[i][1]))
+        #     scores+=preds[i][2].item()
+        #     if scores>1:
+        #         break
+        # return spans, scores
         return preds[0][0], preds[0][1], preds[0][2].item()
 
 def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
@@ -252,10 +259,16 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
     for idx in range(len(all_words)):
         words = all_words[idx]
         start_word, end_word, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
+                
+        # spans, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
+
 
         inst_pred = all_inst_preds[idx]
         inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.95])
         word_pred = decode(words, first_chars[idx], start_word, end_word)
+        # word_pred = ''
+        # for (s, e) in spans:
+        #     word_pred += ' '+decode(words, first_chars[idx], s, e)
 
         if all_whole_preds[idx]>0.5:
             word_pred = decode(words, first_chars[idx], 0, len(words)-1)
