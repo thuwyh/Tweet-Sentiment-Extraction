@@ -21,7 +21,7 @@ def clean(x):
 
 class TrainDataset(Dataset):
 
-    def __init__(self, data, tokenizer, mode='train', smooth=False, epsilon=0.0, distill=False, offset=4):
+    def __init__(self, data, old_data, tokenizer, mode='train', smooth=False, epsilon=0.0, distill=False, offset=4):
         super(TrainDataset, self).__init__()
         # if 'type' in data.columns.tolist():
         #     self._type = data['type'].tolist()
@@ -44,9 +44,29 @@ class TrainDataset(Dataset):
             self._whole_sentence = self._data['whole_sentence'].tolist()
 
 
+        
+        temp = self._data.merge(old_data[['text','sentiment2']], on='text', how='left')
+        temp['sentiment2'].fillna('none', inplace=True)
+
         self._text = self._data['text'].tolist()
         self._sentiment = self._data['sentiment'].tolist()
-        # self._sentiment2 = self._data['old_sentiment'].tolist()
+        sentiment2 = []
+        for s1, s2 in zip(self._sentiment, temp['sentiment2'].tolist()):
+            if s1 == 'negative':
+                if s2 in ['worry','sadness','hate','boredom','anger','neutral','empty']:
+                    sentiment2.append(s2)
+                else:
+                    sentiment2.append(s1)
+
+            elif s1=='positive':
+                if s2 in ['happiness','love','relief','fun','surprise','enthusiasm','neutral']:
+                    sentiment2.append(s2)
+                else:
+                    sentiment2.append(s1)
+            else:
+                sentiment2.append(s1)
+            
+        self._sentiment2 = sentiment2
         senti2label = {
             'positive': 2,
             'negative': 0,
@@ -55,6 +75,7 @@ class TrainDataset(Dataset):
         self._data['senti_label'] = self._data['sentiment'].apply(
             lambda x: senti2label[x])
         self._sentilabel = self._data['senti_label'].tolist()
+        
         self.prepare_word()
 
         if mode == 'train':
@@ -99,7 +120,7 @@ class TrainDataset(Dataset):
                 # get tokens
                 w = w.replace("'", "\"")
                 w = w.replace("`", "'")
-                # w = w.replace("ï¿½", "")
+                w = w.replace("ï¿½", "")
                 if first_char[idx]:
                     prefix = " "
                 else:
@@ -174,7 +195,7 @@ class TrainDataset(Dataset):
 
     def __getitem__(self, idx):
         sentiment = self._sentiment[idx]
-        # sentiment2 = self._sentiment2[idx]
+        sentiment2 = self._sentiment2[idx]
         if self._mode != 'train':
             # just return tokens and labels
             tokens = self._tokens[idx]
@@ -198,12 +219,12 @@ class TrainDataset(Dataset):
                     # deletion
                     if random.random() < 0.05 and word_idx != word_start:
                         continue
-                    if random.random() < 0.3:  # and word_idx!=word_start and word_idx!=word_end:
+                    if random.random() < 0.5:  # and word_idx!=word_start and word_idx!=word_end:
                         if w in self._syns_map:
                             w = self._syns_map[w]
                     w = w.replace("'", "\"")
                     w = w.replace("`", "'")
-                    # w = w.replace("ï¿½", "")
+                    w = w.replace("ï¿½", "")
                     prefix = " " if first_char[word_idx] else ""
                     for token in self._tokenizer.tokenize(prefix+w):
                         if random.random()<0.02:
@@ -227,8 +248,9 @@ class TrainDataset(Dataset):
             inst = [-100]*self._offset+inst+[-100]
             whole_sentence = self._whole_sentence[idx]
 
+        
         inputs = self._tokenizer.encode_plus(
-            sentiment, tokens, return_tensors='pt')
+            sentiment+' '+sentiment2, tokens, return_tensors='pt')
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:

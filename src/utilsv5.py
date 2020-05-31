@@ -262,13 +262,23 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
                 
         # spans, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
 
-
         inst_pred = all_inst_preds[idx]
-        inst_word_pred = ' '.join([words[p] for p in range(len(words)) if inst_pred[p]>0.95])
+        s,e = 0, 0
+        threshold = 0.8
+        inst_word_pred = []
+        while(s<len(words)):
+            if inst_pred[s]<threshold:
+                s+=1
+                continue
+            for e in range(s, len(words)):
+                if inst_pred[e]<threshold:
+                    break
+            temp = decode(words, first_chars[idx], s, e)
+            s = e+1
+            inst_word_pred.append(temp)
+        inst_word_pred = ' '.join(inst_word_pred)
         word_pred = decode(words, first_chars[idx], start_word, end_word)
-        # word_pred = ''
-        # for (s, e) in spans:
-        #     word_pred += ' '+decode(words, first_chars[idx], s, e)
+        # word_pred = word_pred+' '+inst_word_pred
 
         if all_whole_preds[idx]>0.5:
             word_pred = decode(words, first_chars[idx], 0, len(words)-1)
@@ -289,6 +299,10 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
     all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=softmax)
     all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=softmax)
     all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
+    valid_df['whole_pred']=all_whole_preds
+    # threshold = np.quantile(valid_df[valid_df['sentiment']!='neutral']['whole_pred'],0.9)
+    # all_whole_preds[all_whole_preds>threshold]=1
+    # all_whole_preds[all_whole_preds<threshold]=0
     word_preds, inst_word_preds, scores = get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args)
     return word_preds, inst_word_preds, scores
 
@@ -301,7 +315,7 @@ def get_loss(pred, label):
     return retval/len(label)
 
 
-def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_preds, all_end_preds, 
+def evaluate(word_preds, whole_preds, valid_df, args=None):  #all_senti_preds, all_start_preds, all_end_preds, 
     metrics = dict()
     metrics['loss'] = 0
     invert_maps = valid_df['invert_map'].tolist()
@@ -334,10 +348,16 @@ def evaluate(word_preds, valid_df, args=None):  #all_senti_preds, all_start_pred
 
     # metrics['clean_score_word'] = clean_score_word/len(texts)
     metrics['dirty_score_word'] = dirty_score_word/len(texts)
-
+    valid_df['whole_pred'] = whole_preds
+    pn_df = valid_df[valid_df['sentiment']=='neutral']
+    metrics['whole_acc'] = accuracy_score(pn_df['whole_sentence'].tolist(), pn_df['whole_pred']>0.5)
+    metrics['whole_auc'] = roc_auc_score(pn_df['whole_sentence'].tolist(), pn_df['whole_pred'].tolist())
     print(
         #   'clean word:', metrics['clean_score_word'], 
-          'dirty word:', metrics['dirty_score_word'])
+          'dirty word:', metrics['dirty_score_word'],
+          'whole_acc', metrics['whole_acc'],
+          'whole_auc', metrics['whole_auc'])
+
     return metrics
 
 

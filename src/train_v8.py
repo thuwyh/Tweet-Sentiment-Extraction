@@ -27,7 +27,7 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
 
 from utilsv5 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words, prepare,
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
-from dataset3 import TrainDataset, MyCollator
+from dataset4 import TrainDataset, MyCollator
 
 class FGM():
     def __init__(self, model):
@@ -71,37 +71,21 @@ class TweetModel(nn.Module):
         self.whole_head = nn.Linear(self.bert.config.hidden_size, 2)
         self.se_head = nn.Linear(self.bert.config.hidden_size, 2)
         self.inst_head = nn.Linear(self.bert.config.hidden_size, 2)
-        self.dropout = nn.Dropout(0.1)
-
-        # nn.init.normal_(self.cnn.weight, std=0.02)
-        # nn.init.normal_(self.cnn.bias, 0)
-
-        # nn.init.normal_(self.whole_head.weight, std=0.02)
-        # nn.init.normal_(self.whole_head.bias, 0)
-
-        # nn.init.normal_(self.inst_head.weight, std=0.02)
-        # nn.init.normal_(self.inst_head.bias, 0)
-
-        # nn.init.normal_(self.se_head.weight, std=0.02)
-        # nn.init.normal_(self.se_head.bias, 0)
-        # # for name, param in self.bert.embeddings.named_parameters():
-        #     param.requires_grad = False
-        # for l in range(3):
-        #     for param in self.bert.encoder.layer[l].parameters():
-        #         param.requires_grad = False
+        self.dropout = nn.Dropout(0.2)
 
     def forward(self, inputs, masks, token_type_ids=None, input_emb=None):
         _, pooled_output, hs = self.bert(
             inputs, masks, token_type_ids=token_type_ids, inputs_embeds=input_emb)
 
-        whole_out = self.whole_head(self.dropout(F.adaptive_avg_pool1d(hs[-1].permute(0,2,1), 1).squeeze(-1)))
-        seq_output = self.dropout(hs[-1]) #+hs[-3]
+        seq_output = hs[-1] #+hs[-3]
 
-        
+        # senti = seq_output[:,1,:]
+        # seq_output = seq_output*senti.unsqueeze(1)
+
+        whole_out = self.whole_head(self.dropout(F.adaptive_avg_pool1d(seq_output.permute(0,2,1), 1).squeeze(-1)))
+
         seq_output = self.gelu(self.cnn(seq_output.permute(0,2,1)).permute(0,2,1))
-        # seq_output, _ = self.rnn(seq_output)
-        # seq_output = self.gelu(self.cnn(seq_output.permute(0,2,1)).permute(0,2,1))
-        # seq_output = torch.cat([seq_output[:,1:,:], seq_output[:,0,:].unsqueeze(1)],axis=1)-seq_output
+        
         se_out = self.se_head(self.dropout(seq_output))  #()
         inst_out = self.inst_head(self.dropout(seq_output))
         return whole_out, se_out[:, :, 0], se_out[:, :, 1], inst_out
@@ -139,7 +123,7 @@ def main():
     arg('--max_grad_norm', type=float, default=-1.0)
     arg('--weight_decay', type=float, default=0.0)
     arg('--adam-epsilon', type=float, default=1e-6)
-    arg('--offset', type=int, default=4)
+    arg('--offset', type=int, default=5)
     arg('--best-loss', action='store_true')
     arg('--abandon', action='store_true')
     arg('--post', action='store_true')
@@ -177,17 +161,23 @@ def main():
             train_fold = train_fold[:args.limit]
             valid_fold = valid_fold[:args.limit]
 
+    old_data = pd.read_csv(DATA_ROOT/'tweet_dataset.csv')
+    old_data.dropna(subset=['text'],inplace=True)
+    old_data['text'] = old_data['text'].apply(lambda x: ' '.join(x.strip().split()))
+    old_data.drop_duplicates(subset=['text'], inplace=True)
+    old_data.rename(index=str, columns={'sentiment':'sentiment2'}, inplace=True)
+
     if args.mode == 'train':
         if run_root.exists() and args.clean:
             shutil.rmtree(run_root)
         run_root.mkdir(exist_ok=True, parents=True)
 
-        training_set = TrainDataset(train_fold, tokenizer=tokenizer, smooth=args.smooth)
+        training_set = TrainDataset(train_fold, old_data, tokenizer=tokenizer, smooth=args.smooth, offset=args.offset)
         training_loader = DataLoader(training_set, collate_fn=collator,
                                      shuffle=True, batch_size=args.batch_size,
                                      num_workers=args.workers)
-
-        valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+        
+        valid_set = TrainDataset(valid_fold, old_data, tokenizer=tokenizer, mode='test', offset=args.offset)
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                   num_workers=args.workers)
 
@@ -230,7 +220,7 @@ def main():
             load_model(model, run_root / ('best-model-%d.pt' % fold))
             model.cuda()
 
-            valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+            valid_set = TrainDataset(valid_fold, old_data, tokenizer=tokenizer, mode='test', offset=args.offset)
             valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                       num_workers=args.workers)
             fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
@@ -274,7 +264,7 @@ def main():
     elif args.mode == 'validate':
         if args.holdout:
             valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
-        valid_set = TrainDataset(valid_fold, tokenizer=tokenizer, mode='test')
+        valid_set = TrainDataset(valid_fold, old_data, tokenizer=tokenizer, mode='test', offset=args.offset)
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                   num_workers=args.workers)
         valid_result = valid_fold.copy()
