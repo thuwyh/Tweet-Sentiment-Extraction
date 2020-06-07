@@ -281,9 +281,9 @@ def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_pred
         word_pred = decode(words, first_chars[idx], start_word, end_word)
         # word_pred = word_pred+' '+inst_word_pred
 
-        if all_whole_preds[idx]>0.5:
-            word_pred = texts[idx] #decode(words, first_chars[idx], 0, len(words)-1)
-            inst_word_pred = word_pred
+        # if all_whole_preds[idx]>0.5:
+        #     word_pred = texts[idx] #decode(words, first_chars[idx], 0, len(words)-1)
+        #     inst_word_pred = word_pred
             
         if args.post:
             if all_senti_labels[idx]==1:
@@ -351,8 +351,8 @@ def evaluate(word_preds, whole_preds, valid_df, args=None):  #all_senti_preds, a
     metrics['dirty_score_word'] = dirty_score_word/len(texts)
     valid_df['whole_pred'] = whole_preds
     pn_df = valid_df[valid_df['sentiment']!='neutral']
-    metrics['whole_acc'] = accuracy_score(pn_df['whole_sentence'].tolist(), pn_df['whole_pred']>0.5)
-    metrics['whole_auc'] = roc_auc_score(pn_df['whole_sentence'].tolist(), pn_df['whole_pred'].tolist())
+    metrics['whole_acc'] = accuracy_score((pn_df['whole_sentence']==1).tolist(), pn_df['whole_pred']>0.5)
+    metrics['whole_auc'] = roc_auc_score((pn_df['whole_sentence']==1).tolist(), pn_df['whole_pred'].tolist())
     print(
         #   'clean word:', metrics['clean_score_word'], 
           'dirty word:', metrics['dirty_score_word'],

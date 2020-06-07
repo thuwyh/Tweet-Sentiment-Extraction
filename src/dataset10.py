@@ -1,0 +1,327 @@
+import torch
+from torch.utils.data import DataLoader, Dataset
+from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoConfig, AutoModel, AutoTokenizer
+from torch.nn.utils.rnn import pad_sequence
+from utilsv8 import prepare, jaccard_list, decode
+from nltk.corpus import wordnet
+import pandas as pd
+import numpy as np
+import random
+
+import warnings
+warnings.filterwarnings("ignore")
+
+
+def clean(x):
+    sp_x = x.split()
+    if len(sp_x[0]) == 1 and len(sp_x) > 1 and sp_x[0].lower() not in ['i', 'a', 'u'] and not sp_x[0].isdigit():
+        return ' '.join(sp_x[1:])
+    return x
+
+
+def broken(x, y):
+    if y > 0 and x[y-1] not in [' ', '.', ',', '!', '?']:
+        return 1
+    return 0
+
+
+def get_pos(x, y):
+    return x.find(y)
+
+
+def broken_start(x, y):
+
+    if y > 0 and x[y-1].isalpha():
+        return True
+    return False
+
+
+def broken_end(x, y):
+    if y < len(x) and x[y] != ' ':
+        return True
+    return False
+
+
+def get_clean_label(x):
+    shift = x['shift']
+    if shift < 2 or x['start_pos_clean'] == 0:
+        return x['selected_text']
+
+    text = x['text']
+    start = x['start_pos_origin']
+    end = x['end_pos_origin']
+
+    while(len(text[start+shift-1:end+shift-1].strip()) == 0):
+        shift += 1
+
+    new_st = text[start+shift-1:end+shift-1]
+
+    return new_st
+
+
+def replace_punc(x):
+    return x.replace("'", "\"").replace("`", "'")
+
+
+def get_extra_space_count(x):
+    prev_space = True
+    space_counts = []
+    count = 0
+    for c in x:
+        if c == ' ':
+            if prev_space:
+                count += 1
+            space_counts.append(count)
+            prev_space = True
+        else:
+            space_counts.append(count)
+            prev_space = False
+    return space_counts
+
+
+class TrainDataset(Dataset):
+
+    def __init__(self, data, old_data, tokenizer, mode='train', smooth=False, epsilon=0.0, distill=False, offset=4):
+        super(TrainDataset, self).__init__()
+
+        self._tokenizer = tokenizer
+        self._data = data
+
+        self._data.dropna(subset=['text'], how='any', inplace=True)
+
+        self._data['text'] = self._data['text'].str.rstrip()
+        self._data['clean_text'] = self._data['text'].apply(
+            lambda x: ' '.join(x.strip().split()))
+
+        self._data['train_text'] = self._data['text'].apply(
+            lambda x: replace_punc(x))
+        self._data['extra_space'] = self._data['text'].apply(
+            lambda x: get_extra_space_count(x))
+
+        if 'selected_text' in self._data.columns.tolist():
+
+            self._data['selected_text'] = self._data['selected_text'].str.rstrip()
+
+            self._data['clean_st'] = self._data['selected_text'].apply(
+                lambda x: ' '.join(x.strip().split()))
+            self._data['start_pos_origin'] = self._data.apply(
+                lambda x: get_pos(x['text'], x['selected_text']), axis=1)
+            self._data['end_pos_origin'] = self._data['start_pos_origin'] + \
+                self._data['selected_text'].str.len()
+            self._data['start_pos_clean'] = self._data.apply(
+                lambda x: get_pos(x['clean_text'], x['clean_st']), axis=1)
+            self._data['end_pos_clean'] = self._data['start_pos_clean'] + \
+                self._data['clean_st'].str.len()
+
+            self._data['broken_start'] = self._data.apply(
+                lambda x: broken_start(x['clean_text'], x['start_pos_clean']), axis=1)
+            self._data['broken_end'] = self._data.apply(
+                lambda x: broken_end(x['clean_text'], x['end_pos_clean']), axis=1)
+
+            self._data['shift'] = self._data.apply(
+                lambda x: x['extra_space'][x['end_pos_origin']-1], axis=1)
+            self._data['to_end'] = self._data['end_pos_origin'] >= self._data['text'].str.len()
+
+            self._data['new_st'] = self._data.apply(
+                lambda x: get_clean_label(x), axis=1)
+
+            self._data['whole_sentence'] = self._data.apply(lambda x: len(
+                x['selected_text'])/len(x['text']) > 0.95, axis=1).astype(int)
+            self._whole_sentence = self._data['whole_sentence'].tolist()
+
+        self._text = self._data['text'].tolist()
+        self._sentiment = self._data['sentiment'].tolist()
+
+        senti2label = {
+            'positive': 2,
+            'negative': 0,
+            'neutral': 1
+        }
+        self._data['senti_label'] = self._data['sentiment'].apply(
+            lambda x: senti2label[x])
+        self._sentilabel = self._data['senti_label'].tolist()
+
+        self.prepare_offset()
+
+        if mode == 'train':
+            self._st = self._data['new_st'].tolist()
+            self.get_label()
+            # self.evaluate_label()
+
+        self._mode = mode
+        self._smooth = smooth
+        self._epsilon = epsilon
+        self._distill = distill
+
+        if distill:
+            self._start_pred = data['start_pred'].tolist()
+            self._end_pred = data['end_pred'].tolist()
+        self._offset = offset
+
+    def prepare_offset(self):
+        offsets = []
+        tokens = []
+        for text in self._text:
+            inputs = self._tokenizer.encode_plus(
+                text, return_offsets_mapping=True, add_special_tokens=False)
+            offset = inputs['offset_mapping']
+            token = inputs['input_ids']
+            offsets.append(offset)
+            tokens.append(token)
+        
+        self._offsets = offsets
+        self._data['offsets'] = offsets
+        self._tokens = tokens
+
+    def get_label(self):
+        self._start_token_idx = []
+        self._end_token_idx = []
+        for idx in range(len(self._text)):
+            text = self._text[idx]
+            st = self._st[idx].strip()
+
+            inputs = self._tokenizer.encode_plus(
+                text, return_offsets_mapping=True, add_special_tokens=False)
+            offset = inputs['offset_mapping']
+            tokens = inputs['input_ids']
+            temp = np.zeros(len(text))
+
+            end_pos = 0
+            start_pos = text.find(st, end_pos)
+            first_end = start_pos+len(st)
+            temp[start_pos:first_end] = 1
+
+            if start_pos < 0:
+                print(text)
+                print(st)
+
+            label = []
+            for token_idx, w in enumerate(tokens):
+                token_offset = offset[token_idx]
+                if sum(temp[token_offset[0]:token_offset[1]]) > 0:
+                    label.append(token_idx)
+            if len(label) == 0:
+                print(text)
+                print(st)
+            start_token_idx = min(label)
+            end_token_idx = max(label)
+
+            self._start_token_idx.append(start_token_idx)
+            self._end_token_idx.append(end_token_idx)
+
+        self._data['start'] = self._start_token_idx
+        self._data['end'] = self._end_token_idx
+
+    # def evaluate_label(self):
+    #     def get_jaccard(x):
+    #         label = x['selected_text'].split()
+    #         words = x['words']
+    #         start = x['start']
+    #         end = x['end']
+    #         label2 = decode(words, x['first_char'], start, end).split()
+    #         return jaccard_list(label, label2)
+    #     self._data['label_jaccard'] = self._data.apply(
+    #         lambda x: get_jaccard(x), axis=1)
+    #     print('label jaccard:', self._data['label_jaccard'].mean())
+
+    def __len__(self):
+        return len(self._text)
+
+    def __getitem__(self, idx):
+        text = self._text[idx]
+        sentiment = self._sentiment[idx]
+        # sentiment2 = str(min(self._shift[idx], 9))
+        if self._mode != 'train':
+            # just return tokens and labels
+            tokens = self._tokens[idx]
+            start_idx, end_idx = 0, 0
+            inst = [-100]*(len(tokens)+self._offset+1)
+            start = end = inst
+            whole_sentence = 0
+        else:
+            token_start, token_end = self._start_token_idx[idx], self._end_token_idx[idx]
+            is_label, inst = [], []
+
+            tokens = self._tokens[idx]
+
+            for i in range(len(tokens)):
+                if token_start <= i <= token_end:
+                    is_label.append(i)
+                    inst.append(1)
+                else:
+                    inst.append(0)
+
+            start_idx = token_start+self._offset
+            end_idx = token_end+self._offset
+            inst = [-100]*self._offset+inst+[-100]
+            whole_sentence = self._whole_sentence[idx]
+
+        inputs = self._tokenizer.encode_plus(
+            sentiment, text, return_tensors='pt')  # +' '+sentiment2
+
+        token_id = inputs['input_ids'][0]
+        if 'token_type_ids' in inputs:
+            type_id = inputs['token_type_ids'][0]
+        else:
+            type_id = torch.zeros_like(token_id)
+        mask = inputs['attention_mask'][0]
+
+        if self._distill:
+            start = torch.FloatTensor(
+                [0]*self._offset+list(self._start_pred[idx][:len(tokens)])+[0])
+            end = torch.FloatTensor(
+                [0]*self._offset+list(self._end_pred[idx][:len(tokens)])+[0])
+            assert len(start) == len(token_id)
+        else:
+            epsilon = 0#0.0015*len(mask)#*random.random()
+            start = torch.rand_like(token_id, dtype=torch.float)
+            end = torch.rand_like(token_id, dtype=torch.float)
+
+            start = start*epsilon/torch.sum(start)
+            end = end*epsilon/torch.sum(end)
+
+            start[start_idx] += 1-epsilon
+            end[end_idx] += 1-epsilon
+
+        # if sentiment=='neutral': # and whole_sentence==1 and random.random()<0.5:
+        # if self._shift[idx] > 3:
+        #     whole_sentence = -100
+        #     whole_sentence=-100
+        #     start_idx = -100
+        #     end_idx = -100
+        #     inst = [-100]*len(inst)
+        return token_id, type_id, mask, self._sentilabel[idx], start, end, start_idx, end_idx, torch.LongTensor(inst), whole_sentence
+
+
+class MyCollator:
+
+    def __init__(self, token_pad_value=1, type_pad_value=0):
+        super().__init__()
+        self.token_pad_value = token_pad_value
+        self.type_pad_value = type_pad_value
+
+    def __call__(self, batch):
+        tokens, type_ids, masks, label, start, end, start_idx, end_idx, inst, all_sentence = zip(
+            *batch)
+        tokens = pad_sequence(tokens, batch_first=True,
+                              padding_value=self.token_pad_value)
+        type_ids = pad_sequence(
+            type_ids, batch_first=True, padding_value=self.type_pad_value)
+        masks = pad_sequence(masks, batch_first=True, padding_value=0)
+        label = torch.LongTensor(label)
+        start = pad_sequence(start, batch_first=True, padding_value=0)
+        end = pad_sequence(end, batch_first=True, padding_value=0)
+
+        start_idx = torch.LongTensor(start_idx)
+        end_idx = torch.LongTensor(end_idx)
+        all_sentence = torch.LongTensor(all_sentence)
+        inst = pad_sequence(inst, batch_first=True, padding_value=-100)
+        return tokens, type_ids, masks, label, start, end, start_idx, end_idx, inst, all_sentence
+
+
+if __name__ == '__main__':
+    tokenizer = AutoTokenizer.from_pretrained(
+        '../../bert_models/roberta_base/', cache_dir=None, do_lower_case=True)
+    df = pd.read_csv('../input/tweet-sentiment-extraction/train_folds.csv')
+    # df = df.iloc[:1600]
+    dataset = TrainDataset(df, tokenizer, mode='train')

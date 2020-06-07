@@ -25,9 +25,9 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup,
                                        get_cosine_with_hard_restarts_schedule_with_warmup)
 
-from utilsv8 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words, prepare,
+from utilsv10 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words, prepare,
                    load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
-from dataset4 import TrainDataset, MyCollator
+from dataset10 import TrainDataset, MyCollator
 
 class FGM():
     def __init__(self, model):
@@ -107,10 +107,10 @@ def main():
     arg('run_root')
     arg('--batch-size', type=int, default=32)
     arg('--step', type=int, default=1)
-    arg('--workers', type=int, default=2)
+    arg('--workers', type=int, default=0)
     arg('--lr', type=float, default=0.00002)
     arg('--clean', action='store_true')
-    arg('--n-epochs', type=int, default=5)
+    arg('--n-epochs', type=int, default=3)
     arg('--limit', type=int)
     arg('--fold', type=int, default=0)
     arg('--multi-gpu', type=int, default=0)
@@ -131,7 +131,7 @@ def main():
     arg('--max_grad_norm', type=float, default=-1.0)
     arg('--weight_decay', type=float, default=0.0)
     arg('--adam-epsilon', type=float, default=1e-6)
-    arg('--offset', type=int, default=5)
+    arg('--offset', type=int, default=4)
     arg('--best-loss', action='store_true')
     arg('--abandon', action='store_true')
     arg('--post', action='store_true')
@@ -144,7 +144,7 @@ def main():
 
     run_root = Path('../experiments/' + args.run_root)
     DATA_ROOT = Path('../input/tweet-sentiment-extraction/')
-    tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=False)
+    tokenizer = AutoTokenizer.from_pretrained(args.vocab_path, cache_dir=None, do_lower_case=False, use_fast=True)
     args.tokenizer = tokenizer
     if args.bert_path.find('roberta'):
         collator = MyCollator()
@@ -222,7 +222,7 @@ def main():
     elif args.mode == 'validate5':
         config = AutoConfig.from_pretrained(args.bert_path, output_hidden_states=True)
         model = TweetModel(config=config)
-        for fold in range(4,5):
+        for fold in range(5):
             valid_fold = folds[folds['kfold']==fold]
             load_model(model, run_root / ('best-model-%d.pt' % fold))
             model.cuda()
@@ -241,8 +241,8 @@ def main():
                 dis_start_pred.append(torch.softmax(fold_start_pred[i][args.offset:]/args.temperature, dim=-1).numpy())
                 dis_end_pred.append(torch.softmax(fold_end_pred[i][args.offset:]/args.temperature, dim=-1).numpy())
             assert len(valid_fold)==len(dis_start_pred)
-            folds.loc[valid_fold.index, 'start_pred'] = dis_start_pred
-            folds.loc[valid_fold.index, 'end_pred'] = dis_end_pred
+            # folds.loc[valid_fold.index, 'start_pred'] = dis_start_pred
+            # folds.loc[valid_fold.index, 'end_pred'] = dis_end_pred
             folds.loc[valid_fold.index, 'pred'] = word_preds
             folds.loc[valid_fold.index, 'score'] = scores
             folds.loc[valid_fold.index, 'whole_pred'] = fold_whole_preds
@@ -407,34 +407,34 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             else:
                 loss.backward()
 
-            # fgm.attack() 
-            # whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
-            # # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
-            # # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
-            # whole_loss = ce_fn(whole_out, all_sentence)
+            fgm.attack() 
+            whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
+            # start_out = start_out.masked_fill(~masks.bool(), -10000.0)
+            # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
+            whole_loss = ce_fn(whole_out, all_sentence)
             
-            # start_out = torch.log_softmax(start_out, dim=-1)
-            # end_out = torch.log_softmax(end_out, dim=-1)
-            # start_loss = kl_fn(start_out, starts)
-            # end_loss = kl_fn(end_out, ends)
+            start_out = torch.log_softmax(start_out, dim=-1)
+            end_out = torch.log_softmax(end_out, dim=-1)
+            start_loss = kl_fn(start_out, starts)
+            end_loss = kl_fn(end_out, ends)
 
-            # # start_loss = ce_fn(start_out, hard_starts)
-            # # end_loss = ce_fn(end_out, hard_ends)
-            # # if args.distill:
-            # #     # soft label loss
-            # #     start_loss += kl_fn(start_out, starts)
-            # #     end_loss += kl_fn(end_out, ends)
+            # start_loss = ce_fn(start_out, hard_starts)
+            # end_loss = ce_fn(end_out, hard_ends)
+            # if args.distill:
+            #     # soft label loss
+            #     start_loss += kl_fn(start_out, starts)
+            #     end_loss += kl_fn(end_out, ends)
 
-            # inst_loss = ce_fn(inst_out.permute(0,2,1), inst)
-            # loss = (start_loss+end_loss)+inst_loss+whole_loss
+            inst_loss = ce_fn(inst_out.permute(0,2,1), inst)
+            loss = (start_loss+end_loss)+inst_loss+whole_loss
 
-            # if args.fp16:
-            #     with amp.scale_loss(loss, optimizer) as scaled_loss:
-            #         scaled_loss.backward()
-            # else:
-            #     loss.backward()
+            if args.fp16:
+                with amp.scale_loss(loss, optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
                 
-            # fgm.restore()
+            fgm.restore()
             if i%args.step==0:
                 if args.max_grad_norm > 0:
                     if args.fp16:

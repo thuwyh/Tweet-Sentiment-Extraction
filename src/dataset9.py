@@ -44,7 +44,7 @@ class TrainDataset(Dataset):
                 lambda x: ' '.join(x.strip().split()))
 
             self._data['start_pos'] = self._data.apply(lambda x: get_pos(x['text'], x['selected_text']), axis=1)
-            self._data['whole_sentence'] = self._data.apply(lambda x: broken(x['text'], x['start_pos']), axis=1)
+            self._data['broken'] = self._data.apply(lambda x: broken(x['text'], x['start_pos']), axis=1)
             print(self._data['whole_sentence'].mean())
 
             self._data['c_selected_text'] = self._data['selected_text'].apply(
