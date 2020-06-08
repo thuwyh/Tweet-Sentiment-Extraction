@@ -44,7 +44,7 @@ def broken_end(x, y):
 
 def get_clean_label(x):
     shift = x['shift']
-    if shift < 2 or x['start_pos_clean'] == 0:
+    if shift < 2 or x['start_pos_clean'] == 0 or x['sentiment']=='neutral' or not x['broken_start']:
         return x['selected_text']
 
     text = x['text']
@@ -54,7 +54,7 @@ def get_clean_label(x):
     while(len(text[start+shift-1:end+shift-1].strip()) == 0):
         shift += 1
 
-    new_st = text[start+shift-1:end+shift-1]
+    new_st = text[start+shift-1:end+shift-1].strip()
 
     return new_st
 
@@ -141,7 +141,7 @@ class TrainDataset(Dataset):
             lambda x: senti2label[x])
         self._sentilabel = self._data['senti_label'].tolist()
 
-        self.prepare_offset()
+        self.prepare_words()
 
         if mode == 'train':
             self._st = self._data['new_st'].tolist()
@@ -158,32 +158,70 @@ class TrainDataset(Dataset):
             self._end_pred = data['end_pred'].tolist()
         self._offset = offset
 
-    def prepare_offset(self):
+    def prepare_words(self):
         offsets = []
+        words = []
         tokens = []
+        invert_maps = []
         for text in self._text:
-            inputs = self._tokenizer.encode_plus(
-                text, return_offsets_mapping=True, add_special_tokens=False)
-            offset = inputs['offset_mapping']
-            token = inputs['input_ids']
+            prev_punc = True
+            word = []
+            offset = []
+            token = []
+            invert_map = []
+            for idx, c in enumerate(text):
+                
+                if c in [' ','.',',','!','?','(',')',';',':','-','=',"/","<","`"]:
+                    prev_punc = True
+                    word.append(c)
+                    offset.append(idx)
+                else:
+                    if prev_punc:
+                        word.append(c)
+                        offset.append(idx)
+                        prev_punc = False
+                    else:
+                        word[-1]+=c
+            offset = [(x, x+len(y)) for x, y in zip(offset, word)]
+            for word_idx, w in enumerate(word):
+                if word_idx>0 and word[word_idx-1]==' ':
+                    prefix = ' '
+                else:
+                    prefix = ''
+                if word==' ':
+                    token.append("Ġ")
+                    invert_map.append(word_idx)
+                else:
+                    for t in self._tokenizer.tokenize(prefix+w):
+                        token.append(t)
+                        invert_map.append(word_idx)
+            words.append(word)
             offsets.append(offset)
             tokens.append(token)
+            invert_maps.append(invert_map)
         
         self._offsets = offsets
-        self._data['offsets'] = offsets
+        self._words = words
         self._tokens = tokens
+        # print(max(map(len, self._tokens)))
+        self._invert_map = invert_maps
+        
+        self._data['offsets'] = offsets
+        self._data['words'] = words
+        self._data['invert_map'] = invert_maps
+        
 
     def get_label(self):
         self._start_token_idx = []
         self._end_token_idx = []
+
         for idx in range(len(self._text)):
             text = self._text[idx]
             st = self._st[idx].strip()
-
-            inputs = self._tokenizer.encode_plus(
-                text, return_offsets_mapping=True, add_special_tokens=False)
-            offset = inputs['offset_mapping']
-            tokens = inputs['input_ids']
+            offset = self._offsets[idx]
+            token = self._tokens[idx]
+            word = self._words[idx]
+            invert_map = self._invert_map[idx]
             temp = np.zeros(len(text))
 
             end_pos = 0
@@ -196,13 +234,19 @@ class TrainDataset(Dataset):
                 print(st)
 
             label = []
-            for token_idx, w in enumerate(tokens):
-                token_offset = offset[token_idx]
-                if sum(temp[token_offset[0]:token_offset[1]]) > 0:
+            for token_idx, t in enumerate(token):
+                word_idx = invert_map[token_idx]
+                start = offset[word_idx][0]
+                end = offset[word_idx][1]
+                if sum(temp[start:end])>0:
                     label.append(token_idx)
             if len(label) == 0:
+                print(start_pos, first_end)
                 print(text)
                 print(st)
+                print(offset)
+                print(token)
+                print(invert_map)
             start_token_idx = min(label)
             end_token_idx = max(label)
 
@@ -230,7 +274,6 @@ class TrainDataset(Dataset):
     def __getitem__(self, idx):
         text = self._text[idx]
         sentiment = self._sentiment[idx]
-        # sentiment2 = str(min(self._shift[idx], 9))
         if self._mode != 'train':
             # just return tokens and labels
             tokens = self._tokens[idx]
@@ -257,7 +300,7 @@ class TrainDataset(Dataset):
             whole_sentence = self._whole_sentence[idx]
 
         inputs = self._tokenizer.encode_plus(
-            sentiment, text, return_tensors='pt')  # +' '+sentiment2
+            sentiment, tokens, return_tensors='pt')  # +' '+sentiment2
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:
