@@ -44,18 +44,30 @@ def broken_end(x, y):
 
 def get_clean_label(x):
     shift = x['shift']
-    if shift < 2 or x['start_pos_clean'] == 0 or x['sentiment']=='neutral' or not x['broken_start']:
+    if shift < 1 or x['start_pos_clean'] == 0:
+        return x['selected_text']
+
+    # 不修复shift=1不断头的
+    if shift==1 and  not x['broken_start']:
         return x['selected_text']
 
     text = x['text']
     start = x['start_pos_origin']
     end = x['end_pos_origin']
 
-    while(len(text[start+shift-1:end+shift-1].strip()) == 0):
-        shift += 1
-
-    new_st = text[start+shift-1:end+shift-1].strip()
-
+#     while(len(text[start+shift-1:end+shift-1].strip()) == 0):
+#         shift += 1
+    if shift==1:
+        new_st = text[start+shift:end].strip()
+    else:
+        # 对于shift>1的，都应该修复，除非修复之后还是断头
+        parts = x['selected_text'].split()
+        
+        if len(parts)==1 or len(parts[0])>shift:
+            return x['selected_text']
+        else:
+            new_st = text[start+shift:end+shift-1].strip()
+    assert len(new_st)>0
     return new_st
 
 
@@ -244,9 +256,9 @@ class TrainDataset(Dataset):
                 print(start_pos, first_end)
                 print(text)
                 print(st)
-                print(offset)
-                print(token)
-                print(invert_map)
+                # print(offset)
+                # print(token)
+                # print(invert_map)
             start_token_idx = min(label)
             end_token_idx = max(label)
 
@@ -327,9 +339,7 @@ class TrainDataset(Dataset):
             end[end_idx] += 1-epsilon
 
         # if sentiment=='neutral': # and whole_sentence==1 and random.random()<0.5:
-        # if self._shift[idx] > 3:
-        #     whole_sentence = -100
-        #     whole_sentence=-100
+        # if whole_sentence:
         #     start_idx = -100
         #     end_idx = -100
         #     inst = [-100]*len(inst)

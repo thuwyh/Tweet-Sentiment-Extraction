@@ -80,6 +80,34 @@
 - v8 增加原始数据集，简单修改了网络结构： cv 0.7161
 - v8 不完全增加旧情感： cv 0.71622
 
+### 2020.06.09
+case study
+- 对于shift=1的broken samples，有两种情况
+    - 第一种是表现得像shift=2一样，例如
+    ```
+    It`s fun to see that glimpse of your life
+    s fun
+    ```
+    - 第二种是前面多一个标点符号
+    ```
+    1  Time for me to seek out some coffee for my own caffein love affair too!! Mmmmm... Sweet been of hyper-goodness!!
+    -goodness!
+    ```
+- 对于shift=2的broken samples， 也有两种情况
+    - 第一种是多1个字符
+    - 第二种是多两个字符
+    
+前处理规则
+- shift=1: start pos 回退一位
+
+后处理规则
+- 对于shift=1的样本，只有第二种可以修
+- 对于shift==2的样本，start pos统一滑动2个位置
+- 对于shift>2的样本，start pos统一滑动shift-1个位置，end pos滑动shift-2个位置
+
+尝试训练策略
+- 如果是整句样本，不训练头、尾分类器
+
 ### todo
 - [x] 星号相关的探索
 - 多区间训练及数据增强

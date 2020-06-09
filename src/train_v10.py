@@ -233,7 +233,7 @@ def main():
                                       num_workers=args.workers)
             fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            word_preds, _, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args, softmax=True)
+            word_preds, raw_preds, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args, softmax=True)
             metrics = evaluate(word_preds, fold_whole_preds, valid_fold, args)
 
             dis_start_pred, dis_end_pred = [], []
@@ -245,6 +245,7 @@ def main():
             # folds.loc[valid_fold.index, 'start_pred'] = dis_start_pred
             # folds.loc[valid_fold.index, 'end_pred'] = dis_end_pred
             folds.loc[valid_fold.index, 'pred'] = word_preds
+            folds.loc[valid_fold.index, 'raw_pred'] = raw_preds
             folds.loc[valid_fold.index, 'score'] = scores
             folds.loc[valid_fold.index, 'whole_pred'] = fold_whole_preds
         folds.to_pickle(DATA_ROOT/'preds.pkl')
@@ -382,14 +383,14 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             # 正常loss
             whole_loss = ce_fn(whole_out, all_sentence)
-            start_out = torch.log_softmax(start_out, dim=-1)
-            end_out = torch.log_softmax(end_out, dim=-1)
+            # start_out = torch.log_softmax(start_out, dim=-1)
+            # end_out = torch.log_softmax(end_out, dim=-1)
             
-            start_loss = kl_fn(start_out, starts)
-            end_loss = kl_fn(end_out, ends)
+            # start_loss = kl_fn(start_out, starts)
+            # end_loss = kl_fn(end_out, ends)
 
-            # start_loss = ce_fn(start_out, hard_starts)
-            # end_loss = ce_fn(end_out, hard_ends)
+            start_loss = ce_fn(start_out, hard_starts)
+            end_loss = ce_fn(end_out, hard_ends)
             # if args.distill:
             #     # soft label loss
             #     start_loss += kl_fn(start_out, starts)
@@ -413,13 +414,13 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
                 # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
                 whole_loss = ce_fn(whole_out, all_sentence)
                 
-                start_out = torch.log_softmax(start_out, dim=-1)
-                end_out = torch.log_softmax(end_out, dim=-1)
-                start_loss = kl_fn(start_out, starts)
-                end_loss = kl_fn(end_out, ends)
+                # start_out = torch.log_softmax(start_out, dim=-1)
+                # end_out = torch.log_softmax(end_out, dim=-1)
+                # start_loss = kl_fn(start_out, starts)
+                # end_loss = kl_fn(end_out, ends)
 
-                # start_loss = ce_fn(start_out, hard_starts)
-                # end_loss = ce_fn(end_out, hard_ends)
+                start_loss = ce_fn(start_out, hard_starts)
+                end_loss = ce_fn(end_out, hard_ends)
                 # if args.distill:
                 #     # soft label loss
                 #     start_loss += kl_fn(start_out, starts)
