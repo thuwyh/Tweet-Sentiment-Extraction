@@ -290,18 +290,20 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
         # start_pos = text.find(word_pred)
         # end_pos = start_pos+len(word_pred)
         # if end_pos  and sentiments[idx]!='neutral' and sentiments[idx]!='neutral'  and sentiments[idx]!='neutral'
-        
-        if extra_space[start_pos]==1 and start_pos>1:
-            if text[start_pos-1] in [',','.','?','!'] and text[start_pos-2]!=' ':
-                start_pos -= 1
-        if extra_space[start_pos]==2 and start_pos>extra_space[start_pos] :
-            start_pos -= extra_space[start_pos]
-            if text[end_pos-1] in [',','.','!','?','*']:
-                end_pos -= 1
-            # end_pos -= extra_space[start_pos]
-        if extra_space[start_pos]>=3 and start_pos>extra_space[start_pos]:
-            start_pos -= extra_space[start_pos]
-            end_pos -= (extra_space[start_pos]-2)
+
+        if start_pos>extra_space[start_pos] and extra_space[start_pos]>0:
+            if extra_space[start_pos]==1:
+                if text[start_pos-1] in [',','.','?','!'] and text[start_pos-2]!=' ':
+                    start_pos -= 1
+            elif extra_space[start_pos]==2:
+                start_pos -= extra_space[start_pos]
+                if text[end_pos-1] in [',','.','!','?','*']:
+                    end_pos -= 1
+                # end_pos -= extra_space[start_pos]
+            else:
+                end_pos -= (extra_space[start_pos]-2)
+                start_pos -= extra_space[start_pos]
+                
         word_pred = text[start_pos:end_pos]
         word_preds.append(word_pred)
         inst_word_preds.append(raw_pred)
