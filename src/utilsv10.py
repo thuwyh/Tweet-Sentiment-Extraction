@@ -151,28 +151,20 @@ def ensemble_words(word_preds):
         final_word_preds.append(' '.join(temp))
     return final_word_preds
 
-def ensemble(whole_preds, start_preds, end_preds, inst_preds, df, softmax=False):
+def ensemble(whole_preds, start_preds, end_preds, inst_preds, df):
     # 在logit层面融合
     all_whole_preds, all_end_pred, all_start_pred, all_inst_preds = [], [], [], []
     model_num = len(start_preds)
     for b_idx in range(len(start_preds[0])):
         # merge one batch
         whole_out = whole_preds[0][b_idx]
-        if softmax:
-            start_out = torch.softmax(start_preds[0][b_idx], axis=-1)
-            end_out = torch.softmax(end_preds[0][b_idx], axis=-1)
-        else:
-            start_out = start_preds[0][b_idx]
-            end_out = end_preds[0][b_idx]
+        start_out = start_preds[0][b_idx]
+        end_out = end_preds[0][b_idx]
         inst_out = inst_preds[0][b_idx]
         for m_idx in range(1, model_num):
             whole_out += whole_preds[m_idx][b_idx]
-            if softmax:
-                start_out += torch.softmax(start_preds[m_idx][b_idx], axis=-1)
-                end_out += torch.softmax(end_preds[m_idx][b_idx], axis=-1)
-            else:
-                start_out += start_preds[m_idx][b_idx]
-                end_out += end_preds[m_idx][b_idx]
+            start_out += start_preds[m_idx][b_idx]
+            end_out += end_preds[m_idx][b_idx]
             inst_out += inst_preds[m_idx][b_idx]
         
         whole_out = whole_out/model_num
@@ -197,71 +189,19 @@ def get_best_pred(start_pred, end_pred):
             if end < start:
                 continue
             preds.append((start, end, start_pred[start]+end_pred[end]))
-    preds = sorted(preds, key=lambda x: x[2], reverse=True)
+            break
+        if len(preds)>0:
+            break
+    # preds = sorted(preds, key=lambda x: x[2], reverse=True)
     if len(preds)==0:
         print(top_start[:30], top_end[:30])
         return 0, 0
     else:
-        # scores, spans = 0, []
-        # for i in range(len(preds)):
-        #     spans.append((preds[i][0], preds[i][1]))
-        #     scores+=preds[i][2].item()
-        #     if scores>1:
-        #         break
-        # return spans, scores
         return preds[0][0], preds[0][1], preds[0][2].item()
 
-def get_predicts_from_word_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
-    all_senti_labels = valid_df['senti_label'].values
-    all_words = valid_df['words'].tolist()
-    first_chars = valid_df['first_char'].tolist()
-    texts = valid_df['text'].tolist()
-    shifts = valid_df['shift'].tolist()
 
-    word_preds, inst_word_preds, scores = [], [], []
-    for idx in range(len(all_words)):
-        words = all_words[idx]
-        start_word, end_word, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
-                
-        # spans, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
-
-        inst_pred = all_inst_preds[idx]
-        s,e = 0, 0
-        threshold = 0.8
-        inst_word_pred = []
-        while(s<len(words)):
-            if inst_pred[s]<threshold:
-                s+=1
-                continue
-            for e in range(s, len(words)):
-                if inst_pred[e]<threshold:
-                    break
-            temp = decode(words, first_chars[idx], s, e)
-            s = e+1
-            inst_word_pred.append(temp)
-        inst_word_pred = ' '.join(inst_word_pred)
-        word_pred = decode(words, first_chars[idx], start_word, end_word)
-        # word_pred = word_pred+' '+inst_word_pred
-
-        if all_whole_preds[idx]>0.5 and shifts[idx]<=3:
-            word_pred = texts[idx] #decode(words, first_chars[idx], 0, len(words)-1)
-            inst_word_pred = word_pred
-            
-        if args.post:
-            if all_senti_labels[idx]==1:
-                word_pred = decode(words, first_chars[idx], 0, len(words)-1)
-                inst_word_pred = word_pred
-
-        word_preds.append(word_pred)
-        inst_word_preds.append(inst_word_pred)
-        scores.append(score)
-    return word_preds, inst_word_preds, scores
-
-
-def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args, softmax=False):
-    # all_start_preds = map_to_word(all_start_preds, valid_df, args, softmax=softmax)
-    # all_end_preds = map_to_word(all_end_preds, valid_df, args, softmax=softmax)
-    # all_inst_preds = map_to_word(all_inst_preds, valid_df, args, softmax=False)
+def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_df, args):
+    
     valid_df['whole_pred']=all_whole_preds
     texts = valid_df['text'].tolist()
     offsets = valid_df['offsets'].tolist()
@@ -269,9 +209,7 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
     extra_spaces = valid_df['extra_space'].tolist()
     sentiments = valid_df['sentiment'].tolist()
     word_preds, inst_word_preds, scores= [], [], []
-    # threshold = np.quantile(valid_df[valid_df['sentiment']!='neutral']['whole_pred'],0.9)
-    # all_whole_preds[all_whole_preds>threshold]=1
-    # all_whole_preds[all_whole_preds<threshold]=0
+
     for idx in range(len(all_start_preds)):
         offset = offsets[idx]
         text = texts[idx]
@@ -279,6 +217,10 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
         extra_space = extra_spaces[idx]
         start_token_idx, end_token_idx, score = get_best_pred(all_start_preds[idx][args.offset:], all_end_preds[idx][args.offset:])
         
+        if end_token_idx>=len(invert_map):
+            print(all_end_preds[idx].size())
+            print(len(invert_map))
+            
         if all_whole_preds[idx]>0.5:
             start_pos = 0
             end_pos = len(text)
@@ -286,11 +228,8 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
             start_pos = offset[invert_map[start_token_idx]][0]
             end_pos = offset[invert_map[end_token_idx]][1]
         raw_pred = text[start_pos:end_pos]
-        # word_pred = text[start_pos:end_pos].strip()
-        # start_pos = text.find(word_pred)
-        # end_pos = start_pos+len(word_pred)
-        # if end_pos  and sentiments[idx]!='neutral' and sentiments[idx]!='neutral'  and sentiments[idx]!='neutral'
 
+        # post processing
         if start_pos>extra_space[start_pos] and extra_space[start_pos]>0:
             if extra_space[start_pos]==1:
                 if text[start_pos-1] in [',','.','?','!'] and text[start_pos-2]!=' ':
@@ -299,7 +238,6 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
                 start_pos -= extra_space[start_pos]
                 if text[end_pos-1] in [',','.','!','?','*']:
                     end_pos -= 1
-                # end_pos -= extra_space[start_pos]
             else:
                 end_pos -= (extra_space[start_pos]-2)
                 start_pos -= extra_space[start_pos]
@@ -320,7 +258,7 @@ def get_loss(pred, label):
     return retval/len(label)
 
 
-def evaluate(word_preds, whole_preds, valid_df, args=None):  #all_senti_preds, all_start_preds, all_end_preds, 
+def evaluate(raw_preds, word_preds, whole_preds, valid_df, args=None):  #all_senti_preds, all_start_preds, all_end_preds, 
     metrics = dict()
     metrics['loss'] = 0
     # invert_maps = valid_df['invert_map'].tolist()
@@ -340,7 +278,7 @@ def evaluate(word_preds, whole_preds, valid_df, args=None):  #all_senti_preds, a
         
         # start_word_label, end_word_label = invert_map[starts[idx]], invert_map[ends[idx]]
         clean_label = clean_labels[idx]
-        clean_score_word += jaccard_string(word_preds[idx], clean_label)
+        clean_score_word += jaccard_string(raw_preds[idx], clean_label)
         # clean_score_token += jaccard_string(token_preds[idx], clean_label)
 
         # dirty label & dirty score

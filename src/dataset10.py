@@ -2,7 +2,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 from transformers import RobertaConfig, RobertaModel, RobertaTokenizer, AutoConfig, AutoModel, AutoTokenizer
 from torch.nn.utils.rnn import pad_sequence
-from utilsv8 import prepare, jaccard_list, decode
 from nltk.corpus import wordnet
 import pandas as pd
 import numpy as np
@@ -158,7 +157,6 @@ class TrainDataset(Dataset):
         if mode == 'train':
             self._st = self._data['new_st'].tolist()
             self.get_label()
-            # self.evaluate_label()
 
         self._mode = mode
         self._smooth = smooth
@@ -171,56 +169,54 @@ class TrainDataset(Dataset):
         self._offset = offset
 
     def prepare_words(self):
-        offsets = []
-        words = []
-        tokens = []
-        invert_maps = []
+        all_offsets = []
+        all_words = []
+        all_tokens = []
+        all_invert_maps = []
         for text in self._text:
             prev_punc = True
-            word = []
+            words = []
             offset = []
-            token = []
+            tokens = []
             invert_map = []
             for idx, c in enumerate(text):
                 
                 if c in [' ','.',',','!','?','(',')',';',':','-','=',"/","<","`"]:
                     prev_punc = True
-                    word.append(c)
+                    words.append(c)
                     offset.append(idx)
                 else:
                     if prev_punc:
-                        word.append(c)
+                        words.append(c)
                         offset.append(idx)
                         prev_punc = False
                     else:
-                        word[-1]+=c
-            offset = [(x, x+len(y)) for x, y in zip(offset, word)]
-            for word_idx, w in enumerate(word):
-                if word_idx>0 and word[word_idx-1]==' ':
+                        words[-1]+=c
+            offset = [(x, x+len(y)) for x, y in zip(offset, words)]
+            for word_idx, word in enumerate(words):
+                if word_idx==0 or words[word_idx-1]==' ':
                     prefix = ' '
                 else:
                     prefix = ''
                 if word==' ':
-                    token.append("Ġ")
-                    invert_map.append(word_idx)
+                    continue
                 else:
-                    for t in self._tokenizer.tokenize(prefix+w):
-                        token.append(t)
+                    for t in self._tokenizer.tokenize(prefix+word):
+                        tokens.append(t)
                         invert_map.append(word_idx)
-            words.append(word)
-            offsets.append(offset)
-            tokens.append(token)
-            invert_maps.append(invert_map)
+            all_words.append(words)
+            all_offsets.append(offset)
+            all_tokens.append(tokens)
+            all_invert_maps.append(invert_map)
         
-        self._offsets = offsets
-        self._words = words
-        self._tokens = tokens
-        # print(max(map(len, self._tokens)))
-        self._invert_map = invert_maps
+        self._offsets = all_offsets
+        self._words = all_words
+        self._tokens = all_tokens
+        self._invert_map = all_invert_maps
         
-        self._data['offsets'] = offsets
-        self._data['words'] = words
-        self._data['invert_map'] = invert_maps
+        self._data['offsets'] = all_offsets
+        self._data['words'] = all_words
+        self._data['invert_map'] = all_invert_maps
         
 
     def get_label(self):
@@ -268,17 +264,6 @@ class TrainDataset(Dataset):
         self._data['start'] = self._start_token_idx
         self._data['end'] = self._end_token_idx
 
-    # def evaluate_label(self):
-    #     def get_jaccard(x):
-    #         label = x['selected_text'].split()
-    #         words = x['words']
-    #         start = x['start']
-    #         end = x['end']
-    #         label2 = decode(words, x['first_char'], start, end).split()
-    #         return jaccard_list(label, label2)
-    #     self._data['label_jaccard'] = self._data.apply(
-    #         lambda x: get_jaccard(x), axis=1)
-    #     print('label jaccard:', self._data['label_jaccard'].mean())
 
     def __len__(self):
         return len(self._text)
@@ -312,7 +297,7 @@ class TrainDataset(Dataset):
             whole_sentence = self._whole_sentence[idx]
 
         inputs = self._tokenizer.encode_plus(
-            sentiment, tokens, return_tensors='pt')  # +' '+sentiment2
+            sentiment, tokens, return_tensors='pt')
 
         token_id = inputs['input_ids'][0]
         if 'token_type_ids' in inputs:

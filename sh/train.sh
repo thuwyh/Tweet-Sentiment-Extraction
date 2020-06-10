@@ -65,13 +65,18 @@ cd ../src
 # python train_v10.py validate v10 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_large/ --n-epochs 3 #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
 
 
-# python train_v10.py train v10 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
-# python train_v10.py train v10 --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
-# python train_v10.py train v10 --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
-# python train_v10.py train v10 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
-# python train_v10.py train v10 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
+python train_v10.py train v10 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
+python train_v10.py train v10 --batch-size 16 --fold 1 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
+python train_v10.py train v10 --batch-size 16 --fold 2 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
+python train_v10.py train v10 --batch-size 16 --fold 3 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
+python train_v10.py train v10 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ --fgm #--post #--smooth #--weight_decay 0.01
 
-# python train_v10.py validate v10 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ --n-epochs 3 #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
+# python train_v10.py validate v10 --batch-size 64 --fold 0 --bert-path ../../bert_models/roberta_base/ #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
+# python train_v10.py validate v10 --batch-size 32 --fold 0 --bert-path ../../bert_models/roberta_base/ #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
+# python train_v10.py validate v10 --batch-size 16 --fold 0 --bert-path ../../bert_models/roberta_base/ #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
+# python train_v10.py validate v10 --batch-size 1 --fold 0 --bert-path ../../bert_models/roberta_base/ #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
 
-python train_v10.py validate5 v10 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ #--post #--smooth #--weight_decay 0.01
+# python train_v10.py validate5 v10 --batch-size 16 --fold 4 --bert-path ../../bert_models/roberta_base/ #--post #--smooth #--weight_decay 0.01
+# python train_v10.py predict5 v10 --batch-size 32 --fold 0 --bert-path ../../bert_models/roberta_base/ #--post #--smooth #--weight_decay 0.01
+
 # python train_v8.py validate v8 --batch-size 32 --fold 0 --bert-path ../../bert_models/roberta_base/ #--limit 3200 #--post #--smooth #--smooth #--clean #--weight_decay 0.01 #
