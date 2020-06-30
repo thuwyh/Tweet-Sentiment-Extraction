@@ -10,7 +10,7 @@ Leaderboard page: https://www.kaggle.com/c/tweet-sentiment-extraction/leaderboar
 I have two RoBERTa-based models. The only difference between them is whether the original sentiment is included in the input.
 
 - 10-fold model without original sentiment: cv 0.725153, lb 0.72034, pb 0.72850
-- 10-fold model with original sentiment: cv 0.726468
+- 10-fold model with original sentiment: cv 0.726468, lb 0.72060
 
 The original sentiments are from the original dataset [[data]](https://www.kaggle.com/maxjon/complete-tweet-sentiment-extraction-data)[[discussion]](https://www.kaggle.com/c/tweet-sentiment-extraction/discussion/145363).
 
