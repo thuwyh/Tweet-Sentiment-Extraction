@@ -1,3 +1,10 @@
 experiments/
-input/
+input/*
+
 .vscode/
+**/__pycache__/
+**/*.pyc
+src/runs/
+
+!input/tweet-sentiment-extraction/train_10fold.csv
+!input/tweet-sentiment-extraction/tweet_dataset.csv
