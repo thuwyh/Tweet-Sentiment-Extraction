@@ -6,6 +6,7 @@ from nltk.corpus import wordnet
 import pandas as pd
 import numpy as np
 import random
+import re
 
 import warnings
 warnings.filterwarnings("ignore")
@@ -90,6 +91,8 @@ def get_extra_space_count(x):
     return space_counts
 
 
+    
+
 class TrainDataset(Dataset):
 
     def __init__(self, data, old_data, tokenizer, mode='train', smooth=False, epsilon=0.0, distill=False, offset=4):
@@ -99,6 +102,13 @@ class TrainDataset(Dataset):
         self._data = data
 
         self._data.dropna(subset=['text'], how='any', inplace=True)
+
+        # pattern = re.compile(r"@")
+        # old_data['at_num'] = old_data['old_text'].apply(lambda x: len(pattern.findall(x)))
+        # temp = self._data.merge(old_data[['text','at_num']], on='text', how='left')
+        # temp['at_num'] = temp['at_num'].apply(lambda x: min(x, 5))
+        # self._at_num = temp['at_num'].tolist()
+        # self._data['at_num'] = temp['at_num'].tolist()
 
         self._data['text'] = self._data['text'].str.rstrip()
         self._data['clean_text'] = self._data['text'].apply(
@@ -156,6 +166,7 @@ class TrainDataset(Dataset):
 
         if mode == 'train':
             self._st = self._data['new_st'].tolist()
+            # self.get_syns()
             self.get_label()
 
         self._mode = mode
@@ -168,11 +179,72 @@ class TrainDataset(Dataset):
             self._end_pred = data['end_pred'].tolist()
         self._offset = offset
 
+    def get_syns(self):
+        syns_count = 0
+        self._syns_map = {}
+        for word in self._all_words:
+            syn = wordnet.synsets(word)
+            if len(syn) == 0:
+                continue
+            syn = syn[0].lemmas()[0].name()
+            if syn != word:
+                self._syns_map[word] = syn
+                syns_count += 1
+        print('total synonyms found:', syns_count)
+
+    def get_token_and_label(self, idx):
+        # for synonym augmentation
+        text = self._text[idx]
+        words = self._words[idx]
+        offsets = self._offsets[idx]
+        st = self._st[idx]
+
+        temp = np.zeros(len(text))
+
+        start_pos = text.find(st)
+        end_pos = start_pos+len(st)
+        temp[start_pos:end_pos] = 1
+
+        tokens = []
+        labels = []
+        for word_idx, word in enumerate(words):
+
+            if sum(temp[offsets[word_idx][0]:offsets[word_idx][1]])>0:
+                in_selected_text = True
+            else:
+                in_selected_text = False
+
+            # augmentation
+            if random.random() < 0.5:  # and word_idx!=word_start and word_idx!=word_end:
+                if word in self._syns_map:
+                    word = self._syns_map[word]
+
+            if word_idx==0 or words[word_idx-1]==' ':
+                prefix = ' '
+            else:
+                prefix = ''
+            if word==' ':
+                tokens.append("Ġ")
+                if in_selected_text:
+                    labels.append(len(tokens))
+            else:
+                for t in self._tokenizer.tokenize(prefix+word):
+                    if random.random()<0.02:
+                        random_token_id = random.randint(4, self._tokenizer.vocab_size)
+                        t = self._tokenizer.convert_ids_to_tokens(random_token_id)
+                    tokens.append(t)
+                    if in_selected_text:
+                        labels.append(len(tokens))
+        start_token_idx = min(labels)
+        end_token_idx = max(labels)
+        return tokens, start_token_idx, end_token_idx
+
     def prepare_words(self):
         all_offsets = []
         all_words = []
         all_tokens = []
         all_invert_maps = []
+        self._all_words = set()
         for text in self._text:
             prev_punc = True
             words = []
@@ -180,7 +252,6 @@ class TrainDataset(Dataset):
             tokens = []
             invert_map = []
             for idx, c in enumerate(text):
-                
                 if c in [' ','.',',','!','?','(',')',';',':','-','=',"/","<","`"]:
                     prev_punc = True
                     words.append(c)
@@ -194,12 +265,14 @@ class TrainDataset(Dataset):
                         words[-1]+=c
             offset = [(x, x+len(y)) for x, y in zip(offset, words)]
             for word_idx, word in enumerate(words):
+                self._all_words.add(word)
                 if word_idx==0 or words[word_idx-1]==' ':
                     prefix = ' '
                 else:
                     prefix = ''
                 if word==' ':
-                    continue
+                    tokens.append("Ġ")
+                    invert_map.append(word_idx)
                 else:
                     for t in self._tokenizer.tokenize(prefix+word):
                         tokens.append(t)
@@ -217,6 +290,8 @@ class TrainDataset(Dataset):
         self._data['offsets'] = all_offsets
         self._data['words'] = all_words
         self._data['invert_map'] = all_invert_maps
+        # print('total unique words:', len(self._all_words))
+        print('mean token length', sum(map(len, self._tokens))/len(self._tokens))
         
 
     def get_label(self):
@@ -279,14 +354,15 @@ class TrainDataset(Dataset):
             start = end = inst
             whole_sentence = 0
         else:
+            inst = []
+            # if random.random()<0.1:
+            #     tokens, token_start, token_end = self.get_token_and_label(idx)
+            # else:
             token_start, token_end = self._start_token_idx[idx], self._end_token_idx[idx]
-            is_label, inst = [], []
-
             tokens = self._tokens[idx]
 
             for i in range(len(tokens)):
                 if token_start <= i <= token_end:
-                    is_label.append(i)
                     inst.append(1)
                 else:
                     inst.append(0)
@@ -313,7 +389,7 @@ class TrainDataset(Dataset):
                 [0]*self._offset+list(self._end_pred[idx][:len(tokens)])+[0])
             assert len(start) == len(token_id)
         else:
-            epsilon = 0#0.0015*len(mask)#*random.random()
+            epsilon = 0#0.1/len(token_id)#*len(mask)*random.random()
             start = torch.rand_like(token_id, dtype=torch.float)
             end = torch.rand_like(token_id, dtype=torch.float)
 

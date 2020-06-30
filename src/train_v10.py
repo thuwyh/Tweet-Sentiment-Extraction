@@ -25,8 +25,8 @@ from transformers.optimization import (AdamW, get_cosine_schedule_with_warmup,
                                        get_linear_schedule_with_warmup,
                                        get_cosine_with_hard_restarts_schedule_with_warmup)
 
-from utilsv10 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words,
-                   load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, map_to_word)
+from utilsv10 import (binary_focal_loss, get_learning_rate, jaccard_list, get_best_pred, ensemble, ensemble_words,get_char_prob2,
+                   load_model, save_model, set_seed, write_event, evaluate, get_predicts_from_token_logits, get_char_prob)
 from dataset10 import TrainDataset, MyCollator
 
 class FGM():
@@ -170,6 +170,9 @@ def main():
             train_fold = train_fold[:args.limit]
             valid_fold = valid_fold[:args.limit]
 
+    old_data = pd.read_csv(DATA_ROOT/'tweet_dataset.csv')
+    old_data.drop_duplicates(subset=['text'], inplace=True)
+
     if args.mode == 'train':
         if run_root.exists() and args.clean:
             shutil.rmtree(run_root)
@@ -206,9 +209,7 @@ def main():
         warmup_steps = int(0.1 * total_steps)
         scheduler = get_linear_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
                                                     num_training_steps=total_steps)
-        # scheduler = get_cosine_with_hard_restarts_schedule_with_warmup(optimizer, num_warmup_steps=warmup_steps,
-        #                                             num_training_steps=total_steps, num_cycles=2.0)
-        
+      
         train(args, model, optimizer, scheduler,
               train_loader=training_loader,
               valid_df=valid_fold,
@@ -217,7 +218,7 @@ def main():
     elif args.mode == 'validate5':
         config = AutoConfig.from_pretrained(args.bert_path, output_hidden_states=True)
         model = TweetModel(config=config)
-        for fold in range(5):
+        for fold in range(10):
             valid_fold = folds[folds['kfold']==fold]
             load_model(model, run_root / ('best-model-%d.pt' % fold))
             model.cuda()
@@ -227,9 +228,10 @@ def main():
                                       num_workers=args.workers)
             fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds = predict(
                 model, valid_fold, valid_loader, args, progress=True)
-            word_preds, raw_preds, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args, softmax=True)
-            metrics = evaluate(word_preds, fold_whole_preds, valid_fold, args)
-
+            word_preds, raw_preds, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_pred, fold_end_pred, fold_inst_preds, valid_fold, args)
+            metrics = evaluate(raw_preds, word_preds, fold_whole_preds, valid_fold, args)
+            start_char_prob, end_char_prob = get_char_prob(fold_start_pred, fold_end_pred, valid_fold, args)
+            start_char_prob2, end_char_prob2 = get_char_prob2(fold_start_pred, fold_end_pred, valid_fold, args)
             dis_start_pred, dis_end_pred = [], []
             
             for i in range(len(fold_start_pred)):
@@ -240,15 +242,19 @@ def main():
             # folds.loc[valid_fold.index, 'end_pred'] = dis_end_pred
             folds.loc[valid_fold.index, 'pred'] = word_preds
             folds.loc[valid_fold.index, 'raw_pred'] = raw_preds
-            folds.loc[valid_fold.index, 'score'] = scores
-            folds.loc[valid_fold.index, 'whole_pred'] = fold_whole_preds
-        folds.to_pickle(DATA_ROOT/'preds.pkl')
+            # folds.loc[valid_fold.index, 'score'] = scores
+            # folds.loc[valid_fold.index, 'whole_pred'] = fold_whole_preds
+            folds.loc[valid_fold.index, 'start_char_prob'] = start_char_prob
+            folds.loc[valid_fold.index, 'end_char_prob'] = end_char_prob
+            folds.loc[valid_fold.index, 'start_char_prob2'] = start_char_prob2
+            folds.loc[valid_fold.index, 'end_char_prob2'] = end_char_prob2
+        folds.to_pickle(run_root/'preds_10_2.pkl')
 
     elif args.mode == 'validate':
         if args.holdout:
             valid_fold = pd.read_pickle(DATA_ROOT / args.local_test)
 
-        valid_set = TrainDataset(valid_fold, None, tokenizer=tokenizer, mode='test', offset=args.offset)
+        valid_set = TrainDataset(valid_fold, old_data, tokenizer=tokenizer, mode='test', offset=args.offset)
         valid_loader = DataLoader(valid_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                   num_workers=0)
         valid_result = valid_fold.copy()
@@ -262,6 +268,7 @@ def main():
         
         word_preds, raw_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, valid_fold, args)
         metrics = evaluate(raw_preds, word_preds, all_whole_preds, valid_fold, args)
+        # get_char_prob(all_start_preds, all_end_preds, valid_fold, args)
         # metrics = evaluate(inst_word_preds, valid_fold, args)
         # valid_fold['pred'] = word_preds
         # valid_fold['score'] = scores
@@ -269,8 +276,8 @@ def main():
         # valid_fold.to_csv(run_root/('pred-%d.csv'%args.fold), sep='\t', index=False)
 
     elif args.mode in ['predict', 'predict5']:
-        # test = pd.read_csv(DATA_ROOT /args.test_file)       
-        test = folds[folds['kfold'] == args.fold]
+        test = pd.read_csv(DATA_ROOT /args.test_file)       
+        # test = folds[folds['kfold'] == args.fold]
         test_set = TrainDataset(test, None, tokenizer=tokenizer, mode='test', offset=args.offset)
         test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, collate_fn=collator,
                                  num_workers=0)
@@ -296,7 +303,7 @@ def main():
         
         if args.mode == 'predict5':
             all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = [], [], [], []
-            for fold in range(1):
+            for fold in range(10):
                 load_model(model, run_root / ('best-model-%d.pt' % fold))
                 model.cuda()
                 fold_whole_preds, fold_start_preds, fold_end_preds, fold_inst_preds = predict(model, test, test_loader, args, progress=True)
@@ -306,14 +313,20 @@ def main():
                 all_end_preds.append(fold_end_preds)
                 all_inst_preds.append(fold_inst_preds)
 
-            # all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = ensemble(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test)
-            # word_preds, raw_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test, args)
-            word_preds, raw_preds, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_preds, fold_end_preds, fold_inst_preds, test, args)
-
-        metrics = evaluate(raw_preds, word_preds, fold_whole_preds, test, args)
+            all_whole_preds, all_start_preds, all_end_preds, all_inst_preds = ensemble(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test)
+            word_preds, raw_preds, scores = get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_preds, all_inst_preds, test, args)
+            # word_preds, raw_preds, scores = get_predicts_from_token_logits(fold_whole_preds, fold_start_preds, fold_end_preds, fold_inst_preds, test, args)
+        start_char_prob, end_char_prob = get_char_prob(all_start_preds, all_end_preds, test, args)
+        start_char_prob2, end_char_prob2 = get_char_prob2(all_start_preds, all_end_preds, test, args)
+        # metrics = evaluate(raw_preds, word_preds, fold_whole_preds, test, args)
         test['selected_text'] = word_preds
-        test['score'] = scores
-        test.to_csv('submission.csv', index=False)
+        test['start_char_prob'] = start_char_prob
+        test['end_char_prob'] = end_char_prob
+        test['start_char_prob2'] = start_char_prob2
+        test['end_char_prob2'] = end_char_prob2
+        test.to_pickle(run_root/'submission_10_2.pkl')
+        # test['score'] = scores
+        # test.to_csv('submission.csv', index=False)
 
 def train(args, model: nn.Module, optimizer, scheduler, *,
           train_loader, valid_df, valid_loader, epoch_length, n_epochs=None) -> bool:
@@ -358,14 +371,14 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
             # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
             # 正常loss
             whole_loss = ce_fn(whole_out, all_sentence)
-            # start_out = torch.log_softmax(start_out, dim=-1)
-            # end_out = torch.log_softmax(end_out, dim=-1)
+            start_out = torch.log_softmax(start_out, dim=-1)
+            end_out = torch.log_softmax(end_out, dim=-1)
             
-            # start_loss = kl_fn(start_out, starts)
-            # end_loss = kl_fn(end_out, ends)
+            start_loss = kl_fn(start_out, starts)
+            end_loss = kl_fn(end_out, ends)
 
-            start_loss = ce_fn(start_out, hard_starts)
-            end_loss = ce_fn(end_out, hard_ends)
+            # start_loss = ce_fn(start_out, hard_starts)
+            # end_loss = ce_fn(end_out, hard_ends)
             # if args.distill:
             #     # soft label loss
             #     start_loss += kl_fn(start_out, starts)
@@ -389,13 +402,13 @@ def train(args, model: nn.Module, optimizer, scheduler, *,
                 # end_out = end_out.masked_fill(~masks.bool(), -10000.0)
                 whole_loss = ce_fn(whole_out, all_sentence)
                 
-                # start_out = torch.log_softmax(start_out, dim=-1)
-                # end_out = torch.log_softmax(end_out, dim=-1)
-                # start_loss = kl_fn(start_out, starts)
-                # end_loss = kl_fn(end_out, ends)
+                start_out = torch.log_softmax(start_out, dim=-1)
+                end_out = torch.log_softmax(end_out, dim=-1)
+                start_loss = kl_fn(start_out, starts)
+                end_loss = kl_fn(end_out, ends)
 
-                start_loss = ce_fn(start_out, hard_starts)
-                end_loss = ce_fn(end_out, hard_ends)
+                # start_loss = ce_fn(start_out, hard_starts)
+                # end_loss = ce_fn(end_out, hard_ends)
                 # if args.distill:
                 #     # soft label loss
                 #     start_loss += kl_fn(start_out, starts)
@@ -459,13 +472,18 @@ def predict(model: nn.Module, valid_df, valid_loader, args, progress=False) -> D
             tokens = tokens.cuda()
             types = types.cuda()
             whole_out, start_out, end_out, inst_out = model(tokens, masks, types)
-
+            # print(whole_out[:16])
+            # break
             all_whole_pred.append(torch.softmax(whole_out, dim=-1)[:,1].cpu().numpy())
             inst_out = torch.softmax(inst_out, dim=-1)
             for idx in range(len(start_out)):
                 length = torch.sum(masks[idx,:]).item()-1 # -1 for last token
-                all_start_pred.append(torch.softmax(start_out[idx,:length], axis=-1).cpu())
-                all_end_pred.append(torch.softmax(end_out[idx,:length], axis=-1).cpu())
+                all_start_pred.append(torch.softmax(start_out[idx, args.offset:length], axis=-1).cpu())
+                all_end_pred.append(torch.softmax(end_out[idx, args.offset:length], axis=-1).cpu())
+
+                # all_start_pred.append(start_out[idx, args.offset:length].cpu())
+                # all_end_pred.append(end_out[idx, args.offset:length].cpu())
+
                 all_inst_out.append(inst_out[idx,:,1].cpu())
             assert all_start_pred[-1].dim()==1
 

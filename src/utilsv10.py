@@ -26,118 +26,60 @@ pattern = r"\w+[.]{1,5}\w+"
 pattern = re.compile(pattern)
 
 
-def map_to_word(preds, df, args, softmax=True):
-    invert_maps = df['invert_map'].tolist()
-    words = df['words'].tolist()
-    retval = []
-    for idx in range(len(invert_maps)):
+def get_char_prob(all_start_preds, all_end_preds, valid_df, args):
+    invert_maps = valid_df['invert_map'].tolist()
+    words = valid_df['words'].tolist()
+    texts = valid_df['text'].tolist()
+    start_char_probs, end_char_probs = [], []
+    for idx in range(len(all_start_preds)):
+        invert_map = invert_maps[idx]
         word = words[idx]
-        temp = torch.zeros(len(word))
-        if softmax:
-            pred = torch.softmax(preds[idx], dim=-1)
-            for p in range(len(invert_maps[idx])):
-                temp[invert_maps[idx][p]]+= pred[p+args.offset]
-        else:
-            pred = preds[idx]
-            for p in range(len(invert_maps[idx])):
-                # temp[invert_maps[idx][p]]+= pred[p+args.offset]
-                temp[invert_maps[idx][p]] = max(temp[invert_maps[idx][p]], pred[p+args.offset])
-        retval.append(temp)
-    return retval
+        text = texts[idx]
+        start_word_prob, end_word_prob = np.zeros(len(word)), np.zeros(len(word))
+        start_char_prob, end_char_prob = np.zeros(len(text)), np.zeros(len(text))
+        for t_idx in range(len(all_start_preds[idx])):
+            word_idx = invert_map[t_idx]
+            start_word_prob[word_idx] = max(start_word_prob[word_idx], all_start_preds[idx][t_idx])
+            end_word_prob[word_idx] = max(end_word_prob[word_idx], all_end_preds[idx][t_idx])
+        char_idx = 0
+        for word_idx in range(len(word)):
+            for _ in range(len(word[word_idx])):
+                start_char_prob[char_idx] = start_word_prob[word_idx]
+                end_char_prob[char_idx] = end_word_prob[word_idx]
+                char_idx+=1
+        start_char_probs.append(start_char_prob)
+        end_char_probs.append(end_char_prob)
 
+    return start_char_probs, end_char_probs
 
-def get_final_text(pred_text, orig_text, do_lower_case, verbose_logging=False):
-    """Project the tokenized prediction back to the original text."""
+def get_char_prob2(all_start_preds, all_end_preds, valid_df, args):
+    invert_maps = valid_df['invert_map'].tolist()
+    words = valid_df['words'].tolist()
+    texts = valid_df['text'].tolist()
+    start_char_probs, end_char_probs = [], []
+    for idx in range(len(all_start_preds)):
+        invert_map = invert_maps[idx]
+        word = words[idx]
+        text = texts[idx]
+        start_word_prob, end_word_prob = np.zeros(len(word)), np.zeros(len(word))
+        start_char_prob, end_char_prob = np.zeros(len(text)), np.zeros(len(text))
+        for t_idx in range(len(all_start_preds[idx])):
+            word_idx = invert_map[t_idx]
+            start_word_prob[word_idx] = max(start_word_prob[word_idx], all_start_preds[idx][t_idx])
+            end_word_prob[word_idx] = max(end_word_prob[word_idx], all_end_preds[idx][t_idx])
+        char_idx = 0
+        for word_idx in range(len(word)):
+            for _ in range(len(word[word_idx])):
+                start_char_prob[char_idx] = start_word_prob[word_idx]
+                end_char_prob[char_idx] = end_word_prob[word_idx]
+                char_idx+=1
+        for c_idx in range(len(text)-1):
+            if text[c_idx]==' ' and text[c_idx+1]!=' ':
+                start_char_prob[c_idx]=start_char_prob[c_idx+1]
+        start_char_probs.append(start_char_prob)
+        end_char_probs.append(end_char_prob)
 
-    # When we created the data, we kept track of the alignment between original
-    # (whitespace tokenized) tokens and our WordPiece tokenized tokens. So
-    # now `orig_text` contains the span of our original text corresponding to the
-    # span that we predicted.
-    #
-    # However, `orig_text` may contain extra characters that we don't want in
-    # our prediction.
-    #
-    # For example, let's say:
-    #   pred_text = steve smith
-    #   orig_text = Steve Smith's
-    #
-    # We don't want to return `orig_text` because it contains the extra "'s".
-    #
-    # We don't want to return `pred_text` because it's already been normalized
-    # (the SQuAD eval script also does punctuation stripping/lower casing but
-    # our tokenizer does additional normalization like stripping accent
-    # characters).
-    #
-    # What we really want to return is "Steve Smith".
-    #
-    # Therefore, we have to apply a semi-complicated alignment heuristic between
-    # `pred_text` and `orig_text` to get a character-to-character alignment. This
-    # can fail in certain cases in which case we just return `orig_text`.
-
-    def _strip_spaces(text):
-        ns_chars = []
-        ns_to_s_map = collections.OrderedDict()
-        for (i, c) in enumerate(text):
-            if c == " ":
-                continue
-            ns_to_s_map[len(ns_chars)] = i
-            ns_chars.append(c)
-        ns_text = "".join(ns_chars)
-        return (ns_text, ns_to_s_map)
-
-    # We first tokenize `orig_text`, strip whitespace from the result
-    # and `pred_text`, and check if they are the same length. If they are
-    # NOT the same length, the heuristic has failed. If they are the same
-    # length, we assume the characters are one-to-one aligned.
-    tokenizer = BasicTokenizer(do_lower_case=do_lower_case)
-
-    tok_text = " ".join(tokenizer.tokenize(orig_text))
-
-    start_position = tok_text.find(pred_text)
-    if start_position == -1:
-        if verbose_logging:
-            logger.info("Unable to find text: '%s' in '%s'" % (pred_text, orig_text))
-        return orig_text
-    end_position = start_position + len(pred_text) - 1
-
-    (orig_ns_text, orig_ns_to_s_map) = _strip_spaces(orig_text)
-    (tok_ns_text, tok_ns_to_s_map) = _strip_spaces(tok_text)
-
-    if len(orig_ns_text) != len(tok_ns_text):
-        if verbose_logging:
-            logger.info("Length not equal after stripping spaces: '%s' vs '%s'", orig_ns_text, tok_ns_text)
-        return orig_text
-
-    # We then project the characters in `pred_text` back to `orig_text` using
-    # the character-to-character alignment.
-    tok_s_to_ns_map = {}
-    for (i, tok_index) in tok_ns_to_s_map.items():
-        tok_s_to_ns_map[tok_index] = i
-
-    orig_start_position = None
-    if start_position in tok_s_to_ns_map:
-        ns_start_position = tok_s_to_ns_map[start_position]
-        if ns_start_position in orig_ns_to_s_map:
-            orig_start_position = orig_ns_to_s_map[ns_start_position]
-
-    if orig_start_position is None:
-        if verbose_logging:
-            logger.info("Couldn't map start position")
-        return orig_text
-
-    orig_end_position = None
-    if end_position in tok_s_to_ns_map:
-        ns_end_position = tok_s_to_ns_map[end_position]
-        if ns_end_position in orig_ns_to_s_map:
-            orig_end_position = orig_ns_to_s_map[ns_end_position]
-
-    if orig_end_position is None:
-        if verbose_logging:
-            logger.info("Couldn't map end position")
-        return orig_text
-
-    output_text = orig_text[orig_start_position : (orig_end_position + 1)]
-    return output_text
+    return start_char_probs, end_char_probs
 
 def ensemble_words(word_preds):
     final_word_preds = []
@@ -215,7 +157,7 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
         text = texts[idx]
         invert_map = invert_maps[idx]
         extra_space = extra_spaces[idx]
-        start_token_idx, end_token_idx, score = get_best_pred(all_start_preds[idx][args.offset:], all_end_preds[idx][args.offset:])
+        start_token_idx, end_token_idx, score = get_best_pred(all_start_preds[idx], all_end_preds[idx])
         
         if end_token_idx>=len(invert_map):
             print(all_end_preds[idx].size())
@@ -230,17 +172,18 @@ def get_predicts_from_token_logits(all_whole_preds, all_start_preds, all_end_pre
         raw_pred = text[start_pos:end_pos]
 
         # post processing
-        if start_pos>extra_space[start_pos] and extra_space[start_pos]>0:
-            if extra_space[start_pos]==1:
-                if text[start_pos-1] in [',','.','?','!'] and text[start_pos-2]!=' ':
-                    start_pos -= 1
-            elif extra_space[start_pos]==2:
-                start_pos -= extra_space[start_pos]
-                if text[end_pos-1] in [',','.','!','?','*']:
-                    end_pos -= 1
-            else:
-                end_pos -= (extra_space[start_pos]-2)
-                start_pos -= extra_space[start_pos]
+        if args.post and all_whole_preds[idx]<0.5:
+            if start_pos>extra_space[start_pos] and extra_space[start_pos]>0:
+                if extra_space[start_pos]==1:
+                    if text[start_pos-1] in [',','.','?','!'] and text[start_pos-2]!=' ':
+                        start_pos -= 1
+                elif extra_space[start_pos]==2:
+                    start_pos -= extra_space[start_pos]
+                    if text[end_pos-1] in [',','.','!','?','*']:
+                        end_pos -= 1
+                else:
+                    end_pos -= (extra_space[start_pos]-2)
+                    start_pos -= extra_space[start_pos]
                 
         word_pred = text[start_pos:end_pos]
         word_preds.append(word_pred)
@@ -286,9 +229,9 @@ def evaluate(raw_preds, word_preds, whole_preds, valid_df, args=None):  #all_sen
         dirty_score_word += jaccard_string(word_preds[idx], dirty_label)
         # dirty_score_token += jaccard_string(token_preds[idx], dirty_label)
 
-        if print_count < 20 and all_senti_labels[idx]!=1:
-            print(word_preds[idx], " || ", dirty_label)
-            print_count+=1
+        # if print_count < 20 and all_senti_labels[idx]!=1:
+        #     print(word_preds[idx], " || ", dirty_label)
+        #     print_count+=1
 
     metrics['clean_score_word'] = clean_score_word/len(texts)
     metrics['dirty_score_word'] = dirty_score_word/len(texts)
